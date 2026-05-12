@@ -1,9 +1,11 @@
 """
 A股选股筛选器：从 Sina 源获取全市场行情，按条件过滤
 """
+import re
 import pandas as pd
 from datetime import datetime
 from pathlib import Path
+from io import StringIO
 
 _CACHE_DIR = Path(__file__).parent.parent / "data_cache"
 _CACHE_FILE = _CACHE_DIR / "_screener_cache.csv"
@@ -11,6 +13,9 @@ _CACHE_TTL_MINUTES = 15  # 缓存15分钟，避免频繁请求
 
 _INDUSTRY_CACHE_FILE = _CACHE_DIR / "_industry_mapping.csv"
 _INDUSTRY_TTL_HOURS = 24  # 行业分类不常变，缓存1天
+
+_FUND_FLOW_CACHE_FILE = _CACHE_DIR / "_fund_flow_cache.csv"
+_FUND_FLOW_TTL_MINUTES = 15
 
 
 def _fetch_spot_data() -> pd.DataFrame:
@@ -266,7 +271,10 @@ def screen_stocks(df: pd.DataFrame,
                 if any(ind in industries for ind in ind_list):
                     allowed.add(code)
             if allowed:
-                result = result[result["code"].isin(allowed)]
+                # 行情数据代码带 sh/sz/bj 前缀，行业映射为纯6位代码，需要统一
+                result = result[
+                    result["code"].str.replace(r"^(sh|sz|bj)", "", regex=True).isin(allowed)
+                ]
         except Exception:
             pass
 
@@ -294,5 +302,343 @@ def screen_stocks(df: pd.DataFrame,
         kw = keyword.lower()
         mask = result["code"].str.contains(kw) | result["name"].str.lower().str.contains(kw)
         result = result[mask]
+
+    return result.reset_index(drop=True)
+
+
+# ════════════════ 资金流向 & 成交额排行 ════════════════
+
+def _parse_cn_money(val: str) -> float:
+    """解析带中文单位的金额字符串，如 '18.47亿' → 1847000000, '1.27万' → 12700"""
+    if isinstance(val, (int, float)):
+        return float(val)
+    val = str(val).strip()
+    if not val:
+        return 0.0
+    num_str = val.rstrip("亿万千百")
+    unit = val[len(num_str):]
+    try:
+        num = float(num_str)
+    except ValueError:
+        return 0.0
+    if "亿" in unit:
+        num *= 100_000_000
+    elif "万" in unit:
+        num *= 10_000
+    return num
+
+
+def _fetch_fund_flow_page(v_code: str, page: int) -> pd.DataFrame:
+    """获取单页同花顺个股资金流向数据"""
+    import requests
+    url = f"http://data.10jqka.com.cn/funds/ggzjl/field/zdf/order/desc/page/{page}/ajax/1/free/1/"
+    headers = {
+        "Accept": "text/html, */*; q=0.01",
+        "Accept-Encoding": "gzip, deflate",
+        "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+        "hexin-v": v_code,
+        "Referer": "http://data.10jqka.com.cn/funds/hyzjl/",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "X-Requested-With": "XMLHttpRequest",
+    }
+    r = requests.get(url, headers=headers, timeout=15)
+    if r.status_code != 200:
+        raise RuntimeError(f"HTTP {r.status_code}")
+    return pd.read_html(StringIO(r.text))[0]
+
+
+_V_CODE_MINIRACER = None
+_JS_CONTENT = None
+
+
+def _get_v_code() -> str:
+    """生成同花顺接口所需的 hexin-v 验证码（复用 MiniRacer 实例）"""
+    global _V_CODE_MINIRACER, _JS_CONTENT
+    import py_mini_racer
+    import akshare.stock_feature.stock_fund_flow as ths_mod
+    if _V_CODE_MINIRACER is None:
+        _V_CODE_MINIRACER = py_mini_racer.MiniRacer()
+        _JS_CONTENT = ths_mod._get_file_content_ths("ths.js")
+        _V_CODE_MINIRACER.eval(_JS_CONTENT)
+    return _V_CODE_MINIRACER.call("v")
+
+
+def _fetch_all_fund_flow() -> pd.DataFrame:
+    """从同花顺获取全部个股资金流向数据，104页约5200只股票"""
+    import requests
+    from bs4 import BeautifulSoup
+
+    v_code = _get_v_code()
+    headers = {
+        "Accept": "text/html, */*; q=0.01",
+        "Accept-Encoding": "gzip, deflate",
+        "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+        "hexin-v": v_code,
+        "Referer": "http://data.10jqka.com.cn/funds/hyzjl/",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "X-Requested-With": "XMLHttpRequest",
+    }
+    # 获取第一页（同时取得总页数）
+    url = "http://data.10jqka.com.cn/funds/ggzjl/field/zdf/order/desc/page/1/ajax/1/free/1/"
+    r = requests.get(url, headers=headers, timeout=15)
+    if r.status_code != 200:
+        raise RuntimeError(f"获取资金流向失败: HTTP {r.status_code}")
+
+    soup = BeautifulSoup(r.text, "lxml")
+    page_info = soup.find("span", class_="page_info")
+    total_pages = int(page_info.text.split("/")[1]) if page_info else 104
+    all_pages = [pd.read_html(StringIO(r.text))[0]]
+
+    # 获取剩余页
+    for page in range(2, total_pages + 1):
+        v_code = _get_v_code()
+        headers["hexin-v"] = v_code
+        try:
+            r = requests.get(url.replace("/page/1/", f"/page/{page}/"), headers=headers, timeout=15)
+            if r.status_code == 200:
+                all_pages.append(pd.read_html(StringIO(r.text))[0])
+        except Exception:
+            continue
+
+    df = pd.concat(all_pages, ignore_index=True)
+    # 列名: 序号, 股票代码, 股票名称, 最新价, 涨跌幅, 净流量, 主力资金(元), 游资(元), 散户(元), 成交量(元)
+    df.columns = ["rank", "code", "name", "price", "pct_change_str",
+                   "net_flow_pct", "main_capital", "hot_money",
+                   "retail_money", "volume_str"]
+    df = df.drop(columns=["rank"])
+
+    # 清洗数值列
+    for col in ["price", "pct_change_str", "net_flow_pct"]:
+        df[col] = pd.to_numeric(
+            df[col].astype(str).str.replace("%", "", regex=False), errors="coerce"
+        )
+    df["pct_change"] = df["pct_change_str"]
+    for money_col in ["main_capital", "hot_money", "retail_money"]:
+        df[money_col] = df[money_col].apply(_parse_cn_money)
+    df["code"] = df["code"].astype(str).str.strip()
+    df = df.drop(columns=["pct_change_str", "volume_str"])
+
+    return df
+
+
+def _is_fund_flow_cache_fresh() -> bool:
+    if not _FUND_FLOW_CACHE_FILE.exists():
+        return False
+    mtime = datetime.fromtimestamp(_FUND_FLOW_CACHE_FILE.stat().st_mtime)
+    return (datetime.now() - mtime).total_seconds() < _FUND_FLOW_TTL_MINUTES * 60
+
+
+def get_fund_flow_data(force_refresh: bool = False) -> pd.DataFrame:
+    """获取全市场资金流向数据，自动缓存"""
+    if not force_refresh and _is_fund_flow_cache_fresh():
+        return pd.read_csv(_FUND_FLOW_CACHE_FILE, dtype={"code": str})
+
+    df = _fetch_all_fund_flow()
+    _CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    df.to_csv(_FUND_FLOW_CACHE_FILE, index=False)
+    return df
+
+
+def get_top_capital_inflow(n: int = 50) -> pd.DataFrame:
+    """资金净流入（主力资金）最多的 N 只个股"""
+    df = get_fund_flow_data()
+    top = df.nlargest(n, "main_capital")
+    return top[["code", "name", "price", "pct_change", "main_capital"]].reset_index(drop=True)
+
+
+def get_top_capital_outflow(n: int = 50) -> pd.DataFrame:
+    """资金净流出（主力资金卖出）最多的 N 只个股"""
+    df = get_fund_flow_data()
+    top = df.nsmallest(n, "main_capital")
+    return top[["code", "name", "price", "pct_change", "main_capital"]].reset_index(drop=True)
+
+
+def get_top_turnover(n: int = 50) -> pd.DataFrame:
+    """成交额最多的 N 只个股（基于实时行情数据）"""
+    df = get_stock_list()
+    top = df.nlargest(n, "turnover")
+    return top[["code", "name", "price", "pct_change", "turnover"]].reset_index(drop=True)
+
+
+# ════════════════ 智能选股：多维度数据合并 ════════════════
+
+_COMBINED_CACHE_FILE = _CACHE_DIR / "_combined_cache.csv"
+_COMBINED_TTL_MINUTES = 15
+
+
+def get_combined_data(force_refresh: bool = False) -> pd.DataFrame:
+    """
+    合并多维度数据：行情(新浪) + 资金流(同花顺) + 行业(申万)
+    返回包含所有维度的宽表 DataFrame
+    """
+    # 检查缓存：需同时满足 TTL 且依赖的源缓存不超过它
+    if not force_refresh and _COMBINED_CACHE_FILE.exists():
+        age_sec = (datetime.now() - datetime.fromtimestamp(
+            _COMBINED_CACHE_FILE.stat().st_mtime)).total_seconds()
+        if age_sec < _COMBINED_TTL_MINUTES * 60:
+            # 确认源数据缓存不新于合并缓存（防止源数据已刷新但合并缓存是旧的）
+            combined_mtime = datetime.fromtimestamp(_COMBINED_CACHE_FILE.stat().st_mtime)
+            sources_ok = True
+            if _FUND_FLOW_CACHE_FILE.exists():
+                ff_mtime = datetime.fromtimestamp(_FUND_FLOW_CACHE_FILE.stat().st_mtime)
+                if ff_mtime > combined_mtime:
+                    sources_ok = False
+            if _CACHE_FILE.exists():
+                spot_mtime = datetime.fromtimestamp(_CACHE_FILE.stat().st_mtime)
+                if spot_mtime > combined_mtime:
+                    sources_ok = False
+            if sources_ok:
+                return pd.read_csv(_COMBINED_CACHE_FILE, dtype={"code": str, "industry": str})
+
+    # 1. 行情数据
+    spot = get_stock_list()
+    # 统一代码格式：去掉 sh/sz/bj 前缀
+    spot["code_raw"] = spot["code"]
+    spot["code"] = spot["code"].str.replace(r"^(sh|sz|bj)", "", regex=True)
+
+    # 2. 资金流数据
+    try:
+        flow = get_fund_flow_data()
+        flow_cols = [c for c in ["code", "main_capital", "hot_money",
+                                  "retail_money", "net_flow_pct"] if c in flow.columns]
+        flow = flow[flow_cols]
+    except Exception:
+        flow = pd.DataFrame(columns=["code"])
+
+    # 3. 行业分类
+    try:
+        mapping = _load_industry_mapping()
+        ind_rows = [{"code": c, "industry": ", ".join(inds)}
+                    for c, inds in mapping.items()]
+        industry_df = pd.DataFrame(ind_rows)
+    except Exception:
+        industry_df = pd.DataFrame(columns=["code", "industry"])
+
+    # 合并
+    merged = spot.merge(flow, on="code", how="left")
+    merged = merged.merge(industry_df, on="code", how="left")
+    merged["industry"] = merged["industry"].fillna("")
+
+    # 填充缺失的资金流数据
+    for col in ["main_capital", "hot_money", "retail_money", "net_flow_pct"]:
+        if col in merged.columns:
+            merged[col] = merged[col].fillna(0)
+        else:
+            merged[col] = 0
+
+    # 计算一些衍生指标
+    if "market_cap" not in merged.columns:
+        merged["market_cap"] = 0  # placeholder
+
+    # 按上海→深圳→北交所排序，主力资金数据对上海/深圳覆盖更全
+    merged["_market_order"] = merged["code"].apply(
+        lambda c: 0 if c[:1] == "6" else (1 if c[:1] in "03" else 2)
+    )
+    merged = merged.sort_values(["_market_order", "code"]).drop(columns=["_market_order"])
+
+    _CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    merged.to_csv(_COMBINED_CACHE_FILE, index=False)
+    return merged
+
+
+def smart_screen(
+    df: pd.DataFrame | None = None,
+    *,
+    # 行情维度
+    price_min: float | None = None,
+    price_max: float | None = None,
+    pct_change_min: float | None = None,
+    pct_change_max: float | None = None,
+    volume_min: float | None = None,
+    turnover_min: float | None = None,
+    market: str = "全部",
+    # 资金维度
+    main_capital_min: float | None = None,
+    main_capital_max: float | None = None,
+    hot_money_min: float | None = None,
+    net_flow_pct_min: float | None = None,
+    net_flow_pct_max: float | None = None,
+    # 行业维度
+    industries: list[str] | None = None,
+    # 搜索
+    keyword: str = "",
+    # 排序
+    sort_by: str = "",
+    ascending: bool = False,
+    top_n: int | None = None,
+) -> pd.DataFrame:
+    """
+    智能多维度选股
+
+    参数:
+        sort_by: 排序字段 (code, price, pct_change, volume, turnover,
+                  main_capital, hot_money, net_flow_pct)
+        top_n: 取前 N 只，None 返回全部
+    """
+    if df is None:
+        df = get_combined_data()
+    result = df.copy()
+
+    # 行情筛选
+    if market == "上海":
+        result = result[result["code"].str.startswith("6")]
+    elif market == "深圳":
+        result = result[result["code"].str.startswith(("0", "3"))]
+    elif market == "北交所":
+        result = result[result["code"].str.startswith(("8", "4", "9"))]
+
+    if price_min is not None:
+        result = result[result["price"] >= price_min]
+    if price_max is not None:
+        result = result[result["price"] <= price_max]
+    if pct_change_min is not None:
+        result = result[result["pct_change"] >= pct_change_min]
+    if pct_change_max is not None:
+        result = result[result["pct_change"] <= pct_change_max]
+    if volume_min is not None:
+        result = result[result["volume"] >= volume_min]
+    if turnover_min is not None:
+        result = result[result["turnover"] >= turnover_min]
+
+    # 资金流筛选
+    if "main_capital" in result.columns:
+        if main_capital_min is not None:
+            result = result[result["main_capital"] >= main_capital_min]
+        if main_capital_max is not None:
+            result = result[result["main_capital"] <= main_capital_max]
+    if "hot_money" in result.columns and hot_money_min is not None:
+        result = result[result["hot_money"] >= hot_money_min]
+    if "net_flow_pct" in result.columns:
+        if net_flow_pct_min is not None:
+            result = result[result["net_flow_pct"] >= net_flow_pct_min]
+        if net_flow_pct_max is not None:
+            result = result[result["net_flow_pct"] <= net_flow_pct_max]
+
+    # 行业筛选
+    if industries:
+        result = result[
+            result["industry"].apply(
+                lambda s: any(ind in str(s).split(", ") for ind in industries)
+            )
+        ]
+
+    # 关键词搜索
+    if keyword:
+        kw = keyword.lower()
+        mask = result["code"].astype(str).str.contains(kw) | \
+               result["name"].astype(str).str.lower().str.contains(kw)
+        result = result[mask]
+
+    # 排序
+    sort_cols = [
+        "price", "pct_change", "volume", "turnover",
+        "main_capital", "hot_money", "net_flow_pct",
+    ]
+    if sort_by and sort_by in sort_cols and sort_by in result.columns:
+        result = result.sort_values(sort_by, ascending=ascending)
+
+    # 取前N
+    if top_n is not None and top_n > 0:
+        result = result.head(top_n)
 
     return result.reset_index(drop=True)
