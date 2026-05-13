@@ -2,6 +2,7 @@
 A股选股筛选器：从 Sina 源获取全市场行情，按条件过滤
 """
 import re
+import numpy as np
 import pandas as pd
 from datetime import datetime
 from pathlib import Path
@@ -9,30 +10,60 @@ from io import StringIO
 
 _CACHE_DIR = Path(__file__).parent.parent / "data_cache"
 _CACHE_FILE = _CACHE_DIR / "_screener_cache.csv"
-_CACHE_TTL_MINUTES = 15  # 缓存15分钟，避免频繁请求
+_CACHE_TTL_MINUTES = 5  # 缓存5分钟，避免频繁请求
 
 _INDUSTRY_CACHE_FILE = _CACHE_DIR / "_industry_mapping.csv"
 _INDUSTRY_TTL_HOURS = 24  # 行业分类不常变，缓存1天
 
 _FUND_FLOW_CACHE_FILE = _CACHE_DIR / "_fund_flow_cache.csv"
-_FUND_FLOW_TTL_MINUTES = 15
+_FUND_FLOW_TTL_MINUTES = 5
 
 
 def _fetch_spot_data() -> pd.DataFrame:
-    """从 AKShare (Sina 源) 获取全 A 股实时行情"""
-    import akshare as ak
-    raw = ak.stock_zh_a_spot()
-    df = raw.copy()
-    # Sina 源返回的中文列名
+    """直接从新浪 JSON API 获取全 A 股实时行情（含 PE/PB/市值）"""
+    import requests
+    from akshare.stock.cons import zh_sina_a_stock_url, zh_sina_a_stock_payload
+    from akshare.stock.stock_zh_a_sina import _get_zh_a_page_count
+
+    page_count = _get_zh_a_page_count()
+
+    all_data = []
+    for page in range(1, page_count + 1):
+        p = zh_sina_a_stock_payload.copy()
+        p.update({"page": page})
+        try:
+            r = requests.get(zh_sina_a_stock_url, params=p, timeout=30)
+            page_data = r.json()
+            if page_data:
+                all_data.extend(page_data)
+        except Exception:
+            continue
+
+    df = pd.DataFrame(all_data)
+    if df.empty:
+        return pd.DataFrame()
+
+    # JSON字段→标准列名
     df = df.rename(columns={
-        "代码": "code", "名称": "name",
-        "最新价": "price", "涨跌额": "change", "涨跌幅": "pct_change",
-        "昨收": "prev_close", "今开": "open", "最高": "high", "最低": "low",
-        "成交量": "volume", "成交额": "turnover",
+        "code": "code", "name": "name",
+        "trade": "price", "pricechange": "change", "changepercent": "pct_change",
+        "settlement": "prev_close", "open": "open", "high": "high", "low": "low",
+        "volume": "volume", "amount": "turnover",
+        "per": "pe", "pb": "pb",
+        "mktcap": "market_cap",  # 总市值(万元)
+        "nmc": "circulating_cap",  # 流通市值(万元)
+        "turnoverratio": "turnover_rate",  # 换手率(%)
     })
-    cols = ["code", "name", "price", "pct_change", "change", "open", "high",
-            "low", "prev_close", "volume", "turnover"]
-    df = df[[c for c in cols if c in df.columns]]
+    # 保留 symbol（如 sh600036）和 code（6位）
+    df["code_raw"] = df.get("symbol", df["code"])
+
+    numeric_cols = ["price", "pct_change", "change", "open", "high", "low",
+                     "prev_close", "volume", "turnover",
+                     "pe", "pb", "market_cap", "circulating_cap", "turnover_rate"]
+    for c in numeric_cols:
+        if c in df.columns:
+            df[c] = pd.to_numeric(df[c], errors="coerce")
+
     return df
 
 
@@ -443,14 +474,14 @@ def get_top_capital_inflow(n: int = 50) -> pd.DataFrame:
     """资金净流入（主力资金）最多的 N 只个股"""
     df = get_fund_flow_data()
     top = df.nlargest(n, "main_capital")
-    return top[["code", "name", "price", "pct_change", "main_capital"]].reset_index(drop=True)
+    return top[["code", "name", "price", "pct_change", "main_capital", "retail_money"]].reset_index(drop=True)
 
 
 def get_top_capital_outflow(n: int = 50) -> pd.DataFrame:
     """资金净流出（主力资金卖出）最多的 N 只个股"""
     df = get_fund_flow_data()
     top = df.nsmallest(n, "main_capital")
-    return top[["code", "name", "price", "pct_change", "main_capital"]].reset_index(drop=True)
+    return top[["code", "name", "price", "pct_change", "main_capital", "retail_money"]].reset_index(drop=True)
 
 
 def get_top_turnover(n: int = 50) -> pd.DataFrame:
@@ -490,11 +521,12 @@ def get_combined_data(force_refresh: bool = False) -> pd.DataFrame:
             if sources_ok:
                 return pd.read_csv(_COMBINED_CACHE_FILE, dtype={"code": str, "industry": str})
 
-    # 1. 行情数据
+    # 1. 行情数据（含 PE/PB/市值）
     spot = get_stock_list()
-    # 统一代码格式：去掉 sh/sz/bj 前缀
-    spot["code_raw"] = spot["code"]
-    spot["code"] = spot["code"].str.replace(r"^(sh|sz|bj)", "", regex=True)
+    # 统一代码格式：code_raw 已在 _fetch_spot_data 中设置，code 为6位纯数字
+    if "code_raw" not in spot.columns:
+        spot["code_raw"] = spot["code"]
+    spot["code"] = spot["code"].astype(str).str.replace(r"^(sh|sz|bj)", "", regex=True)
 
     # 2. 资金流数据
     try:
@@ -526,9 +558,10 @@ def get_combined_data(force_refresh: bool = False) -> pd.DataFrame:
         else:
             merged[col] = 0
 
-    # 计算一些衍生指标
-    if "market_cap" not in merged.columns:
-        merged["market_cap"] = 0  # placeholder
+    # 估值字段来自 Sina，NaN 保留为 NaN（表示无数据）
+    for vcol in ["pe", "pb", "market_cap", "circulating_cap", "turnover_rate"]:
+        if vcol not in merged.columns:
+            merged[vcol] = float("nan")
 
     # 按上海→深圳→北交所排序，主力资金数据对上海/深圳覆盖更全
     merged["_market_order"] = merged["code"].apply(
@@ -539,6 +572,62 @@ def get_combined_data(force_refresh: bool = False) -> pd.DataFrame:
     _CACHE_DIR.mkdir(parents=True, exist_ok=True)
     merged.to_csv(_COMBINED_CACHE_FILE, index=False)
     return merged
+
+
+def _compute_upside_score(df: pd.DataFrame) -> pd.Series:
+    """
+    上涨值博率评分（0-100 分）
+
+    因子权重:
+      - 资金流入强度: 35%  (主力+游资净买金额，对数标准化)
+      - 净流入占比:   25%  (净流量 / 成交额，越高越好)
+      - 涨幅合理性:   20%  (0~5% 最佳，追高风险扣分)
+      - 换手活跃度:   15%  (2~10% 为佳，过冷过热都扣分)
+      - 估值合理:      5%  (PE 0~50，排除亏损/泡沫)
+    """
+    n = len(df)
+    idx = df.index
+
+    # ── 1. 资金流入强度 (0-35) ──
+    total_inflow = df.get("main_capital", pd.Series(0, index=idx)).fillna(0) + \
+                   df.get("hot_money", pd.Series(0, index=idx)).fillna(0)
+    inflow_pos = total_inflow.clip(lower=0)
+    # 对数标准化：log10(1+净流入)，范围约 0~10
+    log_inflow = np.log10(inflow_pos + 1)
+    inflow_score = (log_inflow / 9.0 * 35).clip(0, 35)
+
+    # ── 2. 净流入占比 (0-25) ──
+    net_pct = df.get("net_flow_pct", pd.Series(0, index=idx)).fillna(0).clip(0, 20)
+    pct_score = (net_pct / 20 * 25).clip(0, 25)
+
+    # ── 3. 涨幅合理性 (0-20) ──
+    pct_change = df.get("pct_change", pd.Series(0, index=idx)).fillna(0)
+    chg_score = pd.Series(0.0, index=idx)
+    chg_score[(pct_change >= 0) & (pct_change < 3)] = 20
+    chg_score[(pct_change >= 3) & (pct_change < 5)] = 16
+    chg_score[(pct_change >= -2) & (pct_change < 0)] = 12
+    chg_score[(pct_change >= 5) & (pct_change < 8)] = 8
+    chg_score[(pct_change >= -5) & (pct_change < -2)] = 6
+    chg_score[pct_change >= 8] = 2
+    chg_score[pct_change < -5] = 2
+
+    # ── 4. 换手活跃度 (0-15) ──
+    tr = df.get("turnover_rate", pd.Series(0, index=idx)).fillna(0)
+    tr_score = pd.Series(0.0, index=idx)
+    tr_score[tr.between(2, 5)] = 15
+    tr_score[tr.between(1, 2) | tr.between(5, 8)] = 11
+    tr_score[tr.between(0.5, 1) | tr.between(8, 12)] = 6
+    tr_score[tr.between(0.2, 0.5) | tr.between(12, 20)] = 2
+
+    # ── 5. 估值合理 (0-5) ──
+    pe = df.get("pe", pd.Series(0, index=idx)).fillna(0)
+    pe_score = pd.Series(0.0, index=idx)
+    pe_score[(pe > 0) & (pe < 30)] = 5
+    pe_score[(pe >= 30) & (pe < 60)] = 3
+    pe_score[(pe >= 60) & (pe < 100)] = 1
+
+    total = inflow_score + pct_score + chg_score + tr_score + pe_score
+    return total.round(1)
 
 
 def smart_screen(
@@ -552,6 +641,14 @@ def smart_screen(
     volume_min: float | None = None,
     turnover_min: float | None = None,
     market: str = "全部",
+    # 估值维度
+    pe_min: float | None = None,
+    pe_max: float | None = None,
+    pb_min: float | None = None,
+    pb_max: float | None = None,
+    mktcap_min: float | None = None,
+    mktcap_max: float | None = None,
+    turnover_rate_min: float | None = None,
     # 资金维度
     main_capital_min: float | None = None,
     main_capital_max: float | None = None,
@@ -600,6 +697,26 @@ def smart_screen(
     if turnover_min is not None:
         result = result[result["turnover"] >= turnover_min]
 
+    # 估值筛选
+    if "pe" in result.columns:
+        if pe_min is not None:
+            result = result[result["pe"] >= pe_min]
+        if pe_max is not None:
+            result = result[result["pe"] <= pe_max]
+    if "pb" in result.columns:
+        if pb_min is not None:
+            result = result[result["pb"] >= pb_min]
+        if pb_max is not None:
+            result = result[result["pb"] <= pb_max]
+    if "market_cap" in result.columns:
+        if mktcap_min is not None:
+            result = result[result["market_cap"] >= mktcap_min]
+        if mktcap_max is not None:
+            result = result[result["market_cap"] <= mktcap_max]
+    if "turnover_rate" in result.columns:
+        if turnover_rate_min is not None:
+            result = result[result["turnover_rate"] >= turnover_rate_min]
+
     # 资金流筛选
     if "main_capital" in result.columns:
         if main_capital_min is not None:
@@ -633,9 +750,14 @@ def smart_screen(
     sort_cols = [
         "price", "pct_change", "volume", "turnover",
         "main_capital", "hot_money", "net_flow_pct",
+        "pe", "pb", "market_cap", "turnover_rate",
+        "upside_score",
     ]
     if sort_by and sort_by in sort_cols and sort_by in result.columns:
         result = result.sort_values(sort_by, ascending=ascending)
+    elif sort_by == "upside_score" and "upside_score" not in result.columns:
+        result["upside_score"] = _compute_upside_score(result)
+        result = result.sort_values("upside_score", ascending=False)
 
     # 取前N
     if top_n is not None and top_n > 0:

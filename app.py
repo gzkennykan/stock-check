@@ -13,8 +13,9 @@ from datetime import datetime
 from config import INITIAL_CASH
 from data.fetcher import fetch_data
 from data.screener import get_stock_list, screen_stocks, get_industry_list
-from data.screener import get_top_capital_inflow, get_top_capital_outflow, get_top_turnover
+from data.screener import get_top_capital_inflow, get_top_capital_outflow, get_top_turnover, get_fund_flow_data
 from data.screener import get_combined_data, smart_screen
+from data.lhb import get_lhb_daily, get_lhb_seat_detail
 from strategies import MACrossStrategy, MACDStrategy, RSIStrategy
 from strategies import BollingerStrategy, TripleMAStrategy, KDJStrategy
 from strategies import DonchianStrategy, ATRStrategy
@@ -246,10 +247,10 @@ st.sidebar.caption("引擎: backtrader + optuna")
 
 # =========================== 主区域 ===========================
 
-tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
-    "📊 单策略回测", "📋 策略对比", "🔧 参数优化", "🔍 选股筛选",
+tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10 = st.tabs([
+    "📊 单策略回测", "📋 策略对比", "🔧 参数优化", "🔍 选股池",
     "💰 资金流入TOP50", "💸 资金流出TOP50", "📈 成交额TOP50",
-    "🧠 智能选股",
+    "🧠 智能选股", "🐉 龙虎榜", "🔥 值博率",
 ])
 
 # ---- Tab 1: 单策略回测 ----
@@ -511,15 +512,15 @@ with tab3:
         st.dataframe(trials_df.head(10), use_container_width=True, hide_index=True)
 
 
-# ---- Tab 4: 选股筛选 ----
+# ---- Tab 4: 选股池 ----
 with tab4:
-    st.title("选股筛选")
+    st.title("选股池")
 
     col_btn, col_info = st.columns([2, 3])
     with col_btn:
         refresh = st.button("🔄 刷新行情数据", use_container_width=True)
     with col_info:
-        st.caption("数据每15分钟缓存一次，点击刷新获取最新行情")
+        st.caption("数据每5分钟缓存一次，点击刷新获取最新行情")
 
     # 获取全市场数据
     with st.spinner("正在获取全 A 股行情数据..."):
@@ -589,16 +590,38 @@ with tab4:
         st.info("没有符合条件的股票，请放宽筛选条件")
     else:
         display_df = result.copy()
+        # 只保留展示列，去掉内部字段
+        show_cols = ["code", "name", "price", "change", "pct_change",
+                     "open", "high", "low", "prev_close", "volume", "turnover",
+                     "pe", "pb", "market_cap", "circulating_cap", "turnover_rate",
+                     "buy", "sell", "ticktime"]
+        show_cols = [c for c in show_cols if c in display_df.columns]
+        display_df = display_df[show_cols]
         display_df["price"] = display_df["price"].round(2)
         display_df["pct_change"] = display_df["pct_change"].round(2)
         display_df["change"] = display_df["change"].round(2)
         display_df["volume"] = display_df["volume"].astype(int)
         display_df["turnover"] = display_df["turnover"].astype(int)
+        if "pe" in display_df.columns:
+            display_df["pe"] = display_df["pe"].round(1)
+        if "pb" in display_df.columns:
+            display_df["pb"] = display_df["pb"].round(2)
+        if "market_cap" in display_df.columns:
+            display_df["market_cap"] = display_df["market_cap"].fillna(0).astype(int)
+        if "circulating_cap" in display_df.columns:
+            display_df["circulating_cap"] = display_df["circulating_cap"].fillna(0).astype(int)
+        if "turnover_rate" in display_df.columns:
+            display_df["turnover_rate"] = display_df["turnover_rate"].round(2)
         display_df = display_df.rename(columns={
             "code": "代码", "name": "名称", "price": "最新价",
             "pct_change": "涨跌幅(%)", "change": "涨跌额",
             "open": "今开", "high": "最高", "low": "最低",
             "prev_close": "昨收", "volume": "成交量(手)", "turnover": "成交额(元)",
+            "pe": "市盈率", "pb": "市净率",
+            "market_cap": "总市值(元)", "circulating_cap": "流通市值(元)",
+            "turnover_rate": "换手率(%)",
+            "buy": "买入价", "sell": "卖出价",
+            "ticktime": "更新时间",
         })
         st.dataframe(
             display_df,
@@ -623,20 +646,28 @@ with tab5:
     with col_btn5:
         refresh_flow = st.button("🔄 刷新资金流向", use_container_width=True, key="refresh_flow")
     with col_info5:
-        st.caption("数据每15分钟缓存一次，首次加载需等待30秒左右")
+        st.caption("数据每5分钟缓存一次，首次加载需等待30秒左右")
+
+    flow_search = st.text_input("🔍 搜索代码/名称", key="search_inflow", placeholder="输入股票代码或名称，从全市场搜索...")
 
     with st.spinner("正在获取资金流向数据..."):
         try:
-            top_flow = get_top_capital_inflow(50)
+            if flow_search:
+                full_data = get_fund_flow_data()
+                kw = flow_search.lower()
+                display_flow = full_data[
+                    full_data["code"].astype(str).str.contains(kw) |
+                    full_data["name"].astype(str).str.lower().str.contains(kw)
+                ].copy()
+            else:
+                display_flow = get_top_capital_inflow(50).copy()
         except Exception as e:
             st.error(f"获取资金流向失败: {e}")
             st.stop()
 
-    if not top_flow.empty:
-        display_flow = top_flow.copy()
+    if not display_flow.empty:
         display_flow["price"] = display_flow["price"].round(2)
         display_flow["pct_change"] = display_flow["pct_change"].round(2)
-        # 格式化主力资金显示
         def fmt_money(val):
             if abs(val) >= 1e8:
                 return f"{val/1e8:.2f}亿"
@@ -644,9 +675,17 @@ with tab5:
                 return f"{val/1e4:.2f}万"
             return f"{val:.0f}"
         display_flow["主力净流入"] = display_flow["main_capital"].apply(fmt_money)
+        def fmt_retail(val):
+            if abs(val) >= 1e8:
+                return f"{val/1e8:.2f}亿"
+            elif abs(val) >= 1e4:
+                return f"{val/1e4:.2f}万"
+            return f"{val:.0f}"
+        display_flow["散户资金"] = display_flow["retail_money"].apply(fmt_retail)
         display_flow = display_flow.rename(columns={
             "code": "代码", "name": "名称", "price": "最新价",
             "pct_change": "涨跌幅(%)", "main_capital": "主力净流入(元)",
+            "retail_money": "散户资金(元)",
         })
         st.dataframe(
             display_flow,
@@ -657,7 +696,7 @@ with tab5:
             },
         )
     else:
-        st.info("暂无资金流向数据")
+        st.info("暂无资金流向数据" if not flow_search else f"未找到匹配 '{flow_search}' 的股票")
 
 
 # ---- Tab 6: 资金流出TOP50 ----
@@ -669,17 +708,26 @@ with tab6:
     with col_btn6:
         refresh_out = st.button("🔄 刷新资金流向", use_container_width=True, key="refresh_outflow")
     with col_info6:
-        st.caption("数据每15分钟缓存一次，与流入数据共享缓存")
+        st.caption("数据每5分钟缓存一次，与流入数据共享缓存")
+
+    out_search = st.text_input("🔍 搜索代码/名称", key="search_outflow", placeholder="输入股票代码或名称，从全市场搜索...")
 
     with st.spinner("正在获取资金流出排行..."):
         try:
-            top_out = get_top_capital_outflow(50)
+            if out_search:
+                full_data = get_fund_flow_data()
+                kw = out_search.lower()
+                display_out = full_data[
+                    full_data["code"].astype(str).str.contains(kw) |
+                    full_data["name"].astype(str).str.lower().str.contains(kw)
+                ].copy()
+            else:
+                display_out = get_top_capital_outflow(50).copy()
         except Exception as e:
             st.error(f"获取资金流出排行失败: {e}")
             st.stop()
 
-    if not top_out.empty:
-        display_out = top_out.copy()
+    if not display_out.empty:
         display_out["price"] = display_out["price"].round(2)
         display_out["pct_change"] = display_out["pct_change"].round(2)
         def fmt_money3(val):
@@ -689,9 +737,17 @@ with tab6:
                 return f"{val/1e4:.2f}万"
             return f"{val:.0f}"
         display_out["主力净流出"] = display_out["main_capital"].apply(fmt_money3)
+        def fmt_retail_out(val):
+            if abs(val) >= 1e8:
+                return f"{val/1e8:.2f}亿"
+            elif abs(val) >= 1e4:
+                return f"{val/1e4:.2f}万"
+            return f"{val:.0f}"
+        display_out["散户资金"] = display_out["retail_money"].apply(fmt_retail_out)
         display_out = display_out.rename(columns={
             "code": "代码", "name": "名称", "price": "最新价",
             "pct_change": "涨跌幅(%)", "main_capital": "主力净流出(元)",
+            "retail_money": "散户资金(元)",
         })
         st.dataframe(
             display_out,
@@ -702,7 +758,7 @@ with tab6:
             },
         )
     else:
-        st.info("暂无资金流出数据")
+        st.info("暂无资金流出数据" if not out_search else f"未找到匹配 '{out_search}' 的股票")
 
 
 # ---- Tab 7: 成交额TOP50 ----
@@ -714,17 +770,26 @@ with tab7:
     with col_btn6:
         refresh_turn = st.button("🔄 刷新行情", use_container_width=True, key="refresh_turn")
     with col_info6:
-        st.caption("数据每15分钟缓存一次")
+        st.caption("数据每5分钟缓存一次")
+
+    turn_search = st.text_input("🔍 搜索代码/名称", key="search_turnover", placeholder="输入股票代码或名称，从全市场搜索...")
 
     with st.spinner("正在获取成交额排行..."):
         try:
-            top_turn = get_top_turnover(50)
+            if turn_search:
+                full_data = get_stock_list()
+                kw = turn_search.lower()
+                display_turn = full_data[
+                    full_data["code"].astype(str).str.contains(kw) |
+                    full_data["name"].astype(str).str.lower().str.contains(kw)
+                ].copy()
+            else:
+                display_turn = get_top_turnover(50).copy()
         except Exception as e:
             st.error(f"获取成交额排行失败: {e}")
             st.stop()
 
-    if not top_turn.empty:
-        display_turn = top_turn.copy()
+    if not display_turn.empty:
         display_turn["price"] = display_turn["price"].round(2)
         display_turn["pct_change"] = display_turn["pct_change"].round(2)
         display_turn["turnover"] = display_turn["turnover"].astype(int)
@@ -748,7 +813,7 @@ with tab7:
             },
         )
     else:
-        st.info("暂无成交额数据")
+        st.info("暂无成交额数据" if not turn_search else f"未找到匹配 '{turn_search}' 的股票")
 
 
 # ---- Tab 8: 智能选股 ----
@@ -760,7 +825,7 @@ with tab8:
     with col_btn8:
         refresh_combined = st.button("🔄 刷新数据", use_container_width=True, key="refresh_smart")
     with col_info8:
-        st.caption("首次加载约30秒（含资金流），之后15分钟缓存")
+        st.caption("首次加载约30秒（含资金流），之后5分钟缓存")
 
     with st.spinner("正在加载多维度数据..."):
         try:
@@ -773,7 +838,9 @@ with tab8:
 
     # ─── 筛选条件区 ───
     with st.expander("🔍 多维度筛选条件", expanded=True):
-        tab_dim1, tab_dim2, tab_dim3 = st.tabs(["📊 行情维度", "💰 资金维度", "🏭 行业维度"])
+        tab_dim1, tab_dim2, tab_dim3, tab_dim4 = st.tabs([
+            "📊 行情维度", "📈 估值维度", "💰 资金维度", "🏭 行业维度"
+        ])
 
         with tab_dim1:
             c1, c2, c3, c4 = st.columns(4)
@@ -795,6 +862,36 @@ with tab8:
                 vol_min_s = st.number_input("最低成交量(手)", 0, None, 0, step=10000, key="smart_vol")
 
         with tab_dim2:
+            vc1, vc2, vc3 = st.columns(3)
+            with vc1:
+                pe_min_s = st.number_input(
+                    "PE(TTM) ≥", 0.0, None, 0.0, step=1.0,
+                    help="市盈率下限，0=不限制", key="smart_pe_min"
+                )
+                pe_max_s = st.number_input(
+                    "PE(TTM) ≤", 0.0, None, 0.0, step=1.0,
+                    help="市盈率上限，0=不限制", key="smart_pe_max"
+                )
+            with vc2:
+                pb_min_s = st.number_input(
+                    "PB ≥", 0.0, None, 0.0, step=0.1,
+                    help="市净率下限，0=不限制", key="smart_pb_min"
+                )
+                pb_max_s = st.number_input(
+                    "PB ≤", 0.0, None, 0.0, step=0.1,
+                    help="市净率上限，0=不限制", key="smart_pb_max"
+                )
+            with vc3:
+                mktcap_min_s = st.number_input(
+                    "总市值≥(亿)", 0.0, None, 0.0, step=1.0,
+                    help="总市值下限（亿元），0=不限制", key="smart_mktcap"
+                )
+                turnover_rate_min_s = st.number_input(
+                    "换手率≥(%)", 0.0, None, 0.0, step=0.1,
+                    help="换手率下限，0=不限制", key="smart_tr"
+                )
+
+        with tab_dim3:
             cc1, cc2, cc3 = st.columns(3)
             with cc1:
                 flow_min_s = st.number_input(
@@ -812,7 +909,7 @@ with tab8:
                     help="净流量占比上限"
                 )
 
-        with tab_dim3:
+        with tab_dim4:
             industry_options = get_industry_list()
             selected_inds = st.multiselect(
                 "选择行业板块（留空=全部）",
@@ -835,6 +932,10 @@ with tab8:
                 "main_capital": "主力净流入",
                 "hot_money": "游资金额",
                 "net_flow_pct": "净流入占比",
+                "pe": "市盈率(PE)",
+                "pb": "市净率(PB)",
+                "market_cap": "总市值",
+                "turnover_rate": "换手率",
             }
             sort_choice = st.selectbox("排序字段", list(sort_options.keys()),
                                        format_func=lambda x: sort_options[x], key="smart_sort")
@@ -846,6 +947,7 @@ with tab8:
 
     # ─── 执行筛选 ───
     flow_min_val = flow_min_s * 10000 if flow_min_s is not None and flow_min_s > 0 else None
+    mktcap_min_val = mktcap_min_s * 10000 if mktcap_min_s > 0 else None  # 亿→万元
     result = smart_screen(
         combined,
         price_min=price_min_s if price_min_s > 0 else None,
@@ -854,6 +956,12 @@ with tab8:
         pct_change_max=pct_max_s if pct_max_s < 20 else None,
         volume_min=vol_min_s if vol_min_s > 0 else None,
         market=market_s,
+        pe_min=pe_min_s if pe_min_s > 0 else None,
+        pe_max=pe_max_s if pe_max_s > 0 else None,
+        pb_min=pb_min_s if pb_min_s > 0 else None,
+        pb_max=pb_max_s if pb_max_s > 0 else None,
+        mktcap_min=mktcap_min_val,
+        turnover_rate_min=turnover_rate_min_s if turnover_rate_min_s > 0 else None,
         main_capital_min=flow_min_val,
         net_flow_pct_min=flow_pct_min_s if flow_pct_min_s > -100 else None,
         net_flow_pct_max=flow_pct_max_s if flow_pct_max_s < 100 else None,
@@ -872,13 +980,21 @@ with tab8:
     else:
         # 格式化显示
         display = result.copy()
-        cols_show = ["code", "name", "price", "pct_change", "volume", "turnover",
+        cols_show = ["code", "name", "price", "pct_change",
+                     "pe", "pb", "market_cap", "turnover_rate",
+                     "volume", "turnover",
                      "main_capital", "hot_money", "net_flow_pct", "industry"]
         cols_show = [c for c in cols_show if c in display.columns]
         display = display[cols_show]
 
         display["price"] = display["price"].round(2)
         display["pct_change"] = display["pct_change"].round(2)
+        if "pe" in display.columns:
+            display["pe"] = display["pe"].round(1)
+        if "pb" in display.columns:
+            display["pb"] = display["pb"].round(2)
+        if "turnover_rate" in display.columns:
+            display["turnover_rate"] = display["turnover_rate"].round(2)
         if "volume" in display.columns:
             display["volume"] = display["volume"].fillna(0).astype(int)
         if "turnover" in display.columns:
@@ -899,15 +1015,20 @@ with tab8:
             display["游资"] = display["hot_money"].apply(_fmt_flow)
         if "net_flow_pct" in display.columns:
             display["净流入占比"] = display["net_flow_pct"].apply(lambda x: f"{x:+.2f}%" if x != 0 else "0%")
+        if "market_cap" in display.columns:
+            display["总市值(亿)"] = display["market_cap"].apply(
+                lambda x: f"{x/10000:.1f}" if pd.notna(x) and x > 0 else "-"
+            )
 
         display = display.rename(columns={
             "code": "代码", "name": "名称", "price": "最新价",
-            "pct_change": "涨跌幅(%)", "volume": "成交量(手)",
+            "pct_change": "涨跌幅(%)", "pe": "PE", "pb": "PB",
+            "turnover_rate": "换手率(%)", "volume": "成交量(手)",
             "turnover": "成交额(元)", "industry": "行业",
         })
 
         # 去掉原始数值列避免重复
-        drop_cols = ["main_capital", "hot_money", "net_flow_pct"]
+        drop_cols = ["main_capital", "hot_money", "net_flow_pct", "market_cap"]
         display = display[[c for c in display.columns if c not in drop_cols]]
 
         st.dataframe(
@@ -929,3 +1050,239 @@ with tab8:
             file_name=f"smart_screen_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
             mime="text/csv",
         )
+
+
+# ---- Tab 9: 龙虎榜 ----
+with tab9:
+    st.title("🐉 龙虎榜")
+    st.caption("当日上榜个股，含席位买卖明细、上榜天数、机构动向（数据源: 新浪财经）")
+
+    col_lhb1, col_lhb2, col_lhb3 = st.columns([2, 2, 2])
+    with col_lhb1:
+        lhb_date = st.date_input("上榜日期", value=datetime.now())
+    with col_lhb2:
+        st.write("")
+        st.write("")
+        refresh_lhb = st.button("🔄 刷新数据", use_container_width=True, key="refresh_lhb")
+    with col_lhb3:
+        st.write("")
+        st.caption("数据每5分钟缓存一次")
+
+    lhb_date_str = lhb_date.strftime("%Y%m%d")
+    lhb_date_dash = lhb_date.strftime("%Y-%m-%d")
+
+    with st.spinner("正在获取龙虎榜数据..."):
+        try:
+            lhb_df = get_lhb_daily(date=lhb_date_str, force_refresh=refresh_lhb)
+        except Exception as e:
+            st.error(f"获取龙虎榜数据失败: {e}")
+            st.stop()
+
+    if lhb_df.empty:
+        st.warning(f"{lhb_date_str} 暂无龙虎榜上榜数据（可能非交易日或数据未更新）")
+        st.stop()
+
+    st.caption(f"共 {len(lhb_df)} 只上榜股票")
+
+    search_lhb = st.text_input("🔍 搜索代码/名称", key="search_lhb", placeholder="输入股票代码或名称过滤...")
+
+    df_display = lhb_df.copy()
+    if search_lhb:
+        kw = search_lhb.lower()
+        df_display = df_display[
+            df_display["code"].astype(str).str.contains(kw) |
+            df_display["name"].astype(str).str.lower().str.contains(kw)
+        ]
+        if df_display.empty:
+            st.info(f"未找到匹配 '{search_lhb}' 的上榜股票")
+            st.stop()
+
+    # 格式化主表格
+    tbl = df_display.copy()
+    tbl["close"] = tbl["close"].round(2)
+    tbl["pct_change"] = tbl["pct_change"].round(2)
+    tbl["turnover"] = tbl["turnover"].fillna(0).astype(int)
+
+    def _to_yi(val):
+        """万元 → 亿元"""
+        if abs(val) >= 1e4:
+            return f"{val/1e4:.2f}亿"
+        return f"{val/1e4:.4f}亿"
+
+    tbl["成交额"] = tbl["turnover"].apply(_to_yi)
+    tbl["净买入"] = tbl["net_buy"].apply(lambda x: f"{x/1e4:+.2f}亿" if x else "0")
+    tbl["机构买入"] = tbl["inst_buy"].apply(_to_yi)
+    tbl["机构卖出"] = tbl["inst_sell"].apply(_to_yi)
+    tbl["5日累计买"] = tbl["accum_buy"].apply(_to_yi)
+    tbl["5日累计卖"] = tbl["accum_sell"].apply(_to_yi)
+
+    tbl_display = tbl.rename(columns={
+        "code": "代码", "name": "名称", "close": "收盘价",
+        "pct_change": "涨跌幅(%)", "onboard_days": "上榜天数",
+        "buy_seat_count": "买入席位", "sell_seat_count": "卖出席位",
+        "reason": "上榜原因",
+    })
+
+    show_cols = ["代码", "名称", "收盘价", "涨跌幅(%)", "成交额", "净买入",
+                 "上榜天数", "机构买入", "机构卖出",
+                 "5日累计买", "5日累计卖",
+                 "买入席位", "卖出席位", "上榜原因"]
+    show_cols = [c for c in show_cols if c in tbl_display.columns]
+
+    st.dataframe(
+        tbl_display[show_cols],
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "涨跌幅(%)": st.column_config.NumberColumn(format="%.2f%%"),
+            "代码": st.column_config.TextColumn(width="small"),
+            "名称": st.column_config.TextColumn(width="small"),
+        },
+    )
+
+    # ─── 席位明细（可展开） ───
+    st.divider()
+    st.subheader("🔍 查看个股席位明细")
+    lhb_codes = list(df_display["code"].unique())
+    lhb_code_options = [f"{c} — {df_display[df_display['code']==c]['name'].values[0]}" for c in lhb_codes]
+    selected_lhb = st.selectbox(
+        "选择上榜股票",
+        options=lhb_codes,
+        format_func=lambda c: f"{c} — {df_display[df_display['code']==c]['name'].values[0]}",
+        key="lhb_select",
+    )
+
+    if selected_lhb:
+        with st.spinner(f"获取 {selected_lhb} 席位明细..."):
+            try:
+                seat_df = get_lhb_seat_detail(selected_lhb, lhb_date_dash,
+                                              force_refresh=refresh_lhb)
+            except Exception as e:
+                st.error(f"获取席位明细失败: {e}")
+                seat_df = pd.DataFrame()
+
+        if seat_df.empty:
+            st.info(f"{selected_lhb} 席位明细暂无数据")
+        else:
+            buy_seats = seat_df[seat_df["side"] == "买入"].sort_values("buy_amount", ascending=False)
+            sell_seats = seat_df[seat_df["side"] == "卖出"].sort_values("sell_amount", ascending=False)
+
+            c_left, c_right = st.columns(2)
+            with c_left:
+                st.markdown("### 🟢 买入前5席位")
+                if buy_seats.empty:
+                    st.caption("无买入数据")
+                else:
+                    buy_show = buy_seats[["seat_name", "buy_amount", "sell_amount", "net_amount"]].copy()
+                    buy_show.columns = ["营业部", "买入(万)", "卖出(万)", "净额(万)"]
+                    for c in ["买入(万)", "卖出(万)", "净额(万)"]:
+                        buy_show[c] = buy_show[c].round(1)
+                    st.dataframe(buy_show, use_container_width=True, hide_index=True)
+
+            with c_right:
+                st.markdown("### 🔴 卖出前5席位")
+                if sell_seats.empty:
+                    st.caption("无卖出数据")
+                else:
+                    sell_show = sell_seats[["seat_name", "buy_amount", "sell_amount", "net_amount"]].copy()
+                    sell_show.columns = ["营业部", "买入(万)", "卖出(万)", "净额(万)"]
+                    for c in ["买入(万)", "卖出(万)", "净额(万)"]:
+                        sell_show[c] = sell_show[c].round(1)
+                    st.dataframe(sell_show, use_container_width=True, hide_index=True)
+
+
+# ---- Tab 10: 值博率 ----
+with tab10:
+    from data.screener import get_combined_data, _compute_upside_score
+
+    st.title("🔥 上涨值博率")
+    st.caption("多因子评分模型：综合资金流、涨跌幅、换手率、估值，筛选高上涨潜力的股票")
+
+    col_v1, col_v2, col_v3 = st.columns([2, 2, 2])
+    with col_v1:
+        v_market = st.selectbox("市场板块", ["全部", "上海", "深圳", "北交所"], key="v_market")
+    with col_v2:
+        v_topn = st.selectbox("显示数量", [30, 50, 100, 200], index=1, key="v_topn")
+    with col_v3:
+        v_refresh = st.button("🔄 刷新数据", use_container_width=True, key="v_refresh")
+
+    with st.spinner("正在加载全市场数据并计算值博率..."):
+        try:
+            v_data = get_combined_data(force_refresh=v_refresh)
+        except Exception as e:
+            st.error(f"数据加载失败: {e}")
+            st.stop()
+
+    # 市场筛选
+    if v_market == "上海":
+        v_data = v_data[v_data["code"].str.startswith("6")]
+    elif v_market == "深圳":
+        v_data = v_data[v_data["code"].str.startswith(("0", "3"))]
+    elif v_market == "北交所":
+        v_data = v_data[v_data["code"].str.startswith(("8", "4", "9"))]
+
+    # 剔除ST、退市等
+    if "name" in v_data.columns:
+        v_data = v_data[~v_data["name"].astype(str).str.contains("ST|退")]
+
+    # 计算值博率
+    v_data["upside_score"] = _compute_upside_score(v_data)
+    v_data = v_data.sort_values("upside_score", ascending=False).head(int(v_topn))
+
+    st.subheader(f"值博率 TOP {len(v_data)}")
+
+    # 格式化显示
+    v_display = v_data.copy()
+    show_cols = ["code", "name", "price", "pct_change", "upside_score",
+                 "main_capital", "net_flow_pct", "turnover_rate", "pe", "industry"]
+    show_cols = [c for c in show_cols if c in v_display.columns]
+    v_display = v_display[show_cols]
+
+    v_display["price"] = v_display["price"].round(2)
+    v_display["pct_change"] = v_display["pct_change"].round(2)
+    v_display["upside_score"] = v_display["upside_score"].round(0).astype(int)
+    if "turnover_rate" in v_display.columns:
+        v_display["turnover_rate"] = v_display["turnover_rate"].round(2)
+    if "pe" in v_display.columns:
+        v_display["pe"] = v_display["pe"].round(1)
+
+    def _v_fmt_flow(val):
+        if val == 0:
+            return "0"
+        if abs(val) >= 1e8:
+            return f"{val/1e8:+.2f}亿"
+        elif abs(val) >= 1e4:
+            return f"{val/1e4:+.0f}万"
+        return f"{val:+.0f}"
+
+    if "main_capital" in v_display.columns:
+        v_display["主力净流入"] = v_display["main_capital"].apply(_v_fmt_flow)
+    if "net_flow_pct" in v_display.columns:
+        v_display["净流入占比"] = v_display["net_flow_pct"].apply(lambda x: f"{x:+.2f}%" if x != 0 else "0%")
+
+    v_display = v_display.rename(columns={
+        "code": "代码", "name": "名称", "price": "最新价",
+        "pct_change": "涨跌幅(%)", "upside_score": "值博率",
+        "turnover_rate": "换手率(%)", "pe": "PE",
+        "industry": "行业",
+    })
+
+    drop_cols = ["main_capital", "net_flow_pct"]
+    v_display = v_display[[c for c in v_display.columns if c not in drop_cols]]
+
+    # 值博率颜色渐变
+    st.dataframe(
+        v_display,
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "涨跌幅(%)": st.column_config.NumberColumn(format="%.2f%%"),
+            "值博率": st.column_config.ProgressColumn(
+                format="%d", min_value=0, max_value=100,
+            ),
+            "代码": st.column_config.TextColumn(width="small"),
+            "名称": st.column_config.TextColumn(width="small"),
+        },
+    )
+
+    st.caption("💡 值博率综合评分：资金流入强度(35%) + 净流入占比(25%) + 涨幅合理性(20%) + 换手活跃度(15%) + 估值合理(5%)")
