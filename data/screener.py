@@ -7,6 +7,7 @@ import pandas as pd
 from datetime import datetime
 from pathlib import Path
 from io import StringIO
+from utils import get_cache_ttl, retry, retry_call
 
 _CACHE_DIR = Path(__file__).parent.parent / "data_cache"
 _CACHE_FILE = _CACHE_DIR / "_screener_cache.csv"
@@ -43,6 +44,10 @@ def _fetch_spot_data() -> pd.DataFrame:
     if df.empty:
         return pd.DataFrame()
 
+    # 关键：code 强制字符串 + 补全6位，防止 pandas 类型推断吞掉前导零
+    if "code" in df.columns:
+        df["code"] = df["code"].astype(str).str.zfill(6)
+
     # JSON字段→标准列名
     df = df.rename(columns={
         "code": "code", "name": "name",
@@ -71,7 +76,7 @@ def _is_cache_fresh() -> bool:
     if not _CACHE_FILE.exists():
         return False
     mtime = datetime.fromtimestamp(_CACHE_FILE.stat().st_mtime)
-    return (datetime.now() - mtime).total_seconds() < _CACHE_TTL_MINUTES * 60
+    return (datetime.now() - mtime).total_seconds() < get_cache_ttl(5, 30) * 60
 
 
 def get_stock_list(force_refresh: bool = False) -> pd.DataFrame:
@@ -446,7 +451,7 @@ def _fetch_all_fund_flow() -> pd.DataFrame:
     df["pct_change"] = df["pct_change_str"]
     for money_col in ["main_capital", "hot_money", "retail_money"]:
         df[money_col] = df[money_col].apply(_parse_cn_money)
-    df["code"] = df["code"].astype(str).str.strip()
+    df["code"] = df["code"].astype(str).str.strip().str.zfill(6)
     df = df.drop(columns=["pct_change_str", "volume_str"])
 
     return df
@@ -456,7 +461,7 @@ def _is_fund_flow_cache_fresh() -> bool:
     if not _FUND_FLOW_CACHE_FILE.exists():
         return False
     mtime = datetime.fromtimestamp(_FUND_FLOW_CACHE_FILE.stat().st_mtime)
-    return (datetime.now() - mtime).total_seconds() < _FUND_FLOW_TTL_MINUTES * 60
+    return (datetime.now() - mtime).total_seconds() < get_cache_ttl(5, 30) * 60
 
 
 def get_fund_flow_data(force_refresh: bool = False) -> pd.DataFrame:
@@ -495,6 +500,8 @@ def get_top_turnover(n: int = 50) -> pd.DataFrame:
 
 _COMBINED_CACHE_FILE = _CACHE_DIR / "_combined_cache.csv"
 _COMBINED_TTL_MINUTES = 15
+_PROFIT_CACHE_FILE = _CACHE_DIR / "_profit_cache.csv"
+_PROFIT_TTL_MINUTES = 240  # 财报数据每季度更新，4小时缓存足够
 
 
 def get_combined_data(force_refresh: bool = False) -> pd.DataFrame:
@@ -506,7 +513,7 @@ def get_combined_data(force_refresh: bool = False) -> pd.DataFrame:
     if not force_refresh and _COMBINED_CACHE_FILE.exists():
         age_sec = (datetime.now() - datetime.fromtimestamp(
             _COMBINED_CACHE_FILE.stat().st_mtime)).total_seconds()
-        if age_sec < _COMBINED_TTL_MINUTES * 60:
+        if age_sec < get_cache_ttl(15, 60) * 60:
             # 确认源数据缓存不新于合并缓存（防止源数据已刷新但合并缓存是旧的）
             combined_mtime = datetime.fromtimestamp(_COMBINED_CACHE_FILE.stat().st_mtime)
             sources_ok = True
@@ -546,9 +553,16 @@ def get_combined_data(force_refresh: bool = False) -> pd.DataFrame:
     except Exception:
         industry_df = pd.DataFrame(columns=["code", "industry"])
 
+    # 4. 盈利能力数据（最新季度财报）
+    try:
+        profit = _fetch_profitability_data()
+    except Exception:
+        profit = pd.DataFrame(columns=["code", "roe", "profit_growth", "gross_margin"])
+
     # 合并
     merged = spot.merge(flow, on="code", how="left")
     merged = merged.merge(industry_df, on="code", how="left")
+    merged = merged.merge(profit, on="code", how="left")
     merged["industry"] = merged["industry"].fillna("")
 
     # 填充缺失的资金流数据
@@ -557,6 +571,13 @@ def get_combined_data(force_refresh: bool = False) -> pd.DataFrame:
             merged[col] = merged[col].fillna(0)
         else:
             merged[col] = 0
+
+    # 盈利能力字段填充
+    for pcol in ["roe", "profit_growth", "gross_margin"]:
+        if pcol in merged.columns:
+            merged[pcol] = merged[pcol].fillna(0)
+        else:
+            merged[pcol] = 0
 
     # 估值字段来自 Sina，NaN 保留为 NaN（表示无数据）
     for vcol in ["pe", "pb", "market_cap", "circulating_cap", "turnover_rate"]:
@@ -574,59 +595,171 @@ def get_combined_data(force_refresh: bool = False) -> pd.DataFrame:
     return merged
 
 
+def _fetch_profitability_data(force_refresh: bool = False) -> pd.DataFrame:
+    """获取全市场最新季度盈利能力数据（ROE、净利润增长、毛利率）"""
+    if not force_refresh and _PROFIT_CACHE_FILE.exists():
+        age = (datetime.now() - datetime.fromtimestamp(
+            _PROFIT_CACHE_FILE.stat().st_mtime)).total_seconds()
+        if age < get_cache_ttl(240, 480) * 60:
+            return pd.read_csv(_PROFIT_CACHE_FILE, dtype={"code": str})
+
+    import akshare as ak
+    # 取最近季度末日期（Q1=0331, Q2=0630, Q3=0930, Q4=1231）
+    today = datetime.now()
+    year, month = today.year, today.month
+    quarters = [(3, "0331"), (6, "0630"), (9, "0930"), (12, "1231")]
+    report_date = None
+    for qm, qd in reversed(quarters):
+        if month > qm or (month == qm and today.day >= 15):
+            report_date = f"{year}{qd}"
+            break
+    if report_date is None:
+        report_date = f"{year - 1}1231"
+    raw = retry_call(ak.stock_yjbb_em, date=report_date, times=2, delay=1.0)
+    if raw is None:
+        # 回退到上一季度
+        for qm, qd in reversed(quarters):
+            fallback = f"{year}{qd}"
+            if fallback < report_date:
+                raw = retry_call(ak.stock_yjbb_em, date=fallback, times=1, delay=1.0)
+                if raw is not None:
+                    break
+        if raw is None:
+            if _PROFIT_CACHE_FILE.exists():
+                return pd.read_csv(_PROFIT_CACHE_FILE, dtype={"code": str})
+            return pd.DataFrame(columns=["code", "roe", "profit_growth", "gross_margin"])
+        if _PROFIT_CACHE_FILE.exists():
+            return pd.read_csv(_PROFIT_CACHE_FILE, dtype={"code": str})
+        return pd.DataFrame(columns=["code", "roe", "profit_growth", "gross_margin"])
+
+    if raw.empty:
+        return pd.DataFrame(columns=["code", "roe", "profit_growth", "gross_margin"])
+
+    cols = raw.columns.tolist()
+    # 位置映射: 0=序号, 1=code, 2=name, 3=每股收益, 4=营收, 5=营收同比, 6=营收环比,
+    #            7=净利润, 8=净利润同比, 9=净利润环比, 10=每股净资产,
+    #            11=净资产收益率(ROE), 12=每股经营现金流, 13=销售毛利率, 14=行业, 15=发布日期
+    df = raw.copy()
+    df = df.rename(columns={
+        cols[1]: "code",
+        cols[11]: "roe",
+        cols[8]: "profit_growth",
+        cols[13]: "gross_margin",
+    })
+    df = df[["code", "roe", "profit_growth", "gross_margin"]].copy()
+    df["code"] = df["code"].astype(str).str.strip().str.zfill(6)
+    for c in ["roe", "profit_growth", "gross_margin"]:
+        df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0)
+
+    _CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    df.to_csv(_PROFIT_CACHE_FILE, index=False)
+    return df
+
+
 def _compute_upside_score(df: pd.DataFrame) -> pd.Series:
     """
     上涨值博率评分（0-100 分）
 
     因子权重:
-      - 资金流入强度: 35%  (主力+游资净买金额，对数标准化)
-      - 净流入占比:   25%  (净流量 / 成交额，越高越好)
-      - 涨幅合理性:   20%  (0~5% 最佳，追高风险扣分)
-      - 换手活跃度:   15%  (2~10% 为佳，过冷过热都扣分)
-      - 估值合理:      5%  (PE 0~50，排除亏损/泡沫)
+      - 资金流入强度: 27%  主力+游资净买金额，对数标准化
+      - 净流入占比:   17%  净流量 / 成交额，越高越好
+      - 涨幅合理性:   16%  0~5% 最佳，追高风险扣分
+      - 技术面:       15%  日内强势度 + 振幅健康 + 量能效率
+      - 换手活跃度:   10%  2~10% 为佳，过冷过热都扣分
+      - 盈利能力:     10%  ROE + 净利润增长 + 毛利率
+      - 估值合理:      5%  PE 0~50，排除亏损/泡沫
     """
-    n = len(df)
     idx = df.index
 
-    # ── 1. 资金流入强度 (0-35) ──
+    # ── 1. 资金流入强度 (0-27) ──
     total_inflow = df.get("main_capital", pd.Series(0, index=idx)).fillna(0) + \
                    df.get("hot_money", pd.Series(0, index=idx)).fillna(0)
     inflow_pos = total_inflow.clip(lower=0)
-    # 对数标准化：log10(1+净流入)，范围约 0~10
     log_inflow = np.log10(inflow_pos + 1)
-    inflow_score = (log_inflow / 9.0 * 35).clip(0, 35)
+    inflow_score = (log_inflow / 9.0 * 27).clip(0, 27)
 
-    # ── 2. 净流入占比 (0-25) ──
+    # ── 2. 净流入占比 (0-17) ──
     net_pct = df.get("net_flow_pct", pd.Series(0, index=idx)).fillna(0).clip(0, 20)
-    pct_score = (net_pct / 20 * 25).clip(0, 25)
+    pct_score = (net_pct / 20 * 17).clip(0, 17)
 
-    # ── 3. 涨幅合理性 (0-20) ──
+    # ── 3. 涨幅合理性 (0-16) ──
     pct_change = df.get("pct_change", pd.Series(0, index=idx)).fillna(0)
     chg_score = pd.Series(0.0, index=idx)
-    chg_score[(pct_change >= 0) & (pct_change < 3)] = 20
-    chg_score[(pct_change >= 3) & (pct_change < 5)] = 16
-    chg_score[(pct_change >= -2) & (pct_change < 0)] = 12
-    chg_score[(pct_change >= 5) & (pct_change < 8)] = 8
-    chg_score[(pct_change >= -5) & (pct_change < -2)] = 6
+    chg_score[(pct_change >= 0) & (pct_change < 3)] = 16
+    chg_score[(pct_change >= 3) & (pct_change < 5)] = 12
+    chg_score[(pct_change >= -2) & (pct_change < 0)] = 9
+    chg_score[(pct_change >= 5) & (pct_change < 8)] = 6
+    chg_score[(pct_change >= -5) & (pct_change < -2)] = 4
     chg_score[pct_change >= 8] = 2
     chg_score[pct_change < -5] = 2
 
-    # ── 4. 换手活跃度 (0-15) ──
+    # ── 4. 技术面 (0-15) ──
+    high = df.get("high", pd.Series(0, index=idx)).fillna(0)
+    low = df.get("low", pd.Series(0, index=idx)).fillna(0)
+    price = df.get("price", pd.Series(0, index=idx)).fillna(0)
+    prev_close = df.get("prev_close", pd.Series(0, index=idx)).fillna(0)
     tr = df.get("turnover_rate", pd.Series(0, index=idx)).fillna(0)
-    tr_score = pd.Series(0.0, index=idx)
-    tr_score[tr.between(2, 5)] = 15
-    tr_score[tr.between(1, 2) | tr.between(5, 8)] = 11
-    tr_score[tr.between(0.5, 1) | tr.between(8, 12)] = 6
-    tr_score[tr.between(0.2, 0.5) | tr.between(12, 20)] = 2
 
-    # ── 5. 估值合理 (0-5) ──
+    # 4a. 日内强势度 (0-6)：收盘在日内高低区间的位置
+    hl_range = (high - low).replace(0, np.nan)
+    intraday_strength = ((price - low) / hl_range * 6).fillna(3).clip(0, 6)
+
+    # 4b. 振幅健康 (0-5)：振幅 2%~8% 最佳
+    amplitude = ((high - low) / prev_close.replace(0, np.nan) * 100).fillna(0)
+    amp_score = pd.Series(0.0, index=idx)
+    amp_score[amplitude.between(2, 8)] = 5
+    amp_score[amplitude.between(1, 2) | amplitude.between(8, 12)] = 3
+    amp_score[amplitude.between(0.5, 1)] = 1
+
+    # 4c. 量能效率 (0-4)：每单位换手推动的涨幅（正向），效率越高越好
+    eff = (pct_change.abs() / tr.replace(0, np.nan) * 100).fillna(0).clip(0, 50)
+    eff_score = pd.Series(0.0, index=idx)
+    eff_score[eff >= 5] = 4
+    eff_score[eff.between(2, 5)] = 3
+    eff_score[eff.between(1, 2)] = 2
+    eff_score[eff.between(0.3, 1)] = 1
+
+    # ── 5. 换手活跃度 (0-10) ──
+    tr_score = pd.Series(0.0, index=idx)
+    tr_score[tr.between(2, 5)] = 10
+    tr_score[tr.between(1, 2) | tr.between(5, 8)] = 7
+    tr_score[tr.between(0.5, 1) | tr.between(8, 12)] = 4
+    tr_score[tr.between(0.2, 0.5) | tr.between(12, 20)] = 1
+
+    # ── 6. 盈利能力 (0-10) ──
+    roe = df.get("roe", pd.Series(0, index=idx)).fillna(0)
+    profit_growth = df.get("profit_growth", pd.Series(0, index=idx)).fillna(0)
+    gross_margin = df.get("gross_margin", pd.Series(0, index=idx)).fillna(0)
+
+    # ROE (0-4)
+    roe_score = pd.Series(0.0, index=idx)
+    roe_score[roe > 15] = 4
+    roe_score[roe.between(10, 15)] = 3
+    roe_score[roe.between(5, 10)] = 2
+    roe_score[roe.between(0, 5)] = 1
+
+    # 净利润同比增长 (0-3)
+    growth_score = pd.Series(0.0, index=idx)
+    growth_score[profit_growth > 50] = 3
+    growth_score[profit_growth.between(20, 50)] = 2
+    growth_score[profit_growth.between(0, 20)] = 1
+
+    # 毛利率 (0-3)
+    margin_score = pd.Series(0.0, index=idx)
+    margin_score[gross_margin > 40] = 3
+    margin_score[gross_margin.between(20, 40)] = 2
+    margin_score[gross_margin.between(10, 20)] = 1
+
+    # ── 7. 估值合理 (0-5) ──
     pe = df.get("pe", pd.Series(0, index=idx)).fillna(0)
     pe_score = pd.Series(0.0, index=idx)
     pe_score[(pe > 0) & (pe < 30)] = 5
     pe_score[(pe >= 30) & (pe < 60)] = 3
     pe_score[(pe >= 60) & (pe < 100)] = 1
 
-    total = inflow_score + pct_score + chg_score + tr_score + pe_score
+    total = (inflow_score + pct_score + chg_score + intraday_strength +
+             amp_score + eff_score + tr_score + roe_score + growth_score +
+             margin_score + pe_score)
     return total.round(1)
 
 
@@ -751,7 +884,7 @@ def smart_screen(
         "price", "pct_change", "volume", "turnover",
         "main_capital", "hot_money", "net_flow_pct",
         "pe", "pb", "market_cap", "turnover_rate",
-        "upside_score",
+        "upside_score", "roe", "profit_growth", "gross_margin",
     ]
     if sort_by and sort_by in sort_cols and sort_by in result.columns:
         result = result.sort_values(sort_by, ascending=ascending)

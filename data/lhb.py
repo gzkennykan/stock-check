@@ -6,11 +6,29 @@ import requests
 from datetime import datetime
 from pathlib import Path
 from bs4 import BeautifulSoup
+from utils import get_cache_ttl, retry
 
 _LHB_CACHE_DIR = Path(__file__).parent.parent / "data_cache"
-_LHB_DAILY_CACHE = _LHB_CACHE_DIR / "_lhb_daily_cache.csv"
 _LHB_SEAT_DIR = _LHB_CACHE_DIR / "lhb_seats"
-_LHB_TTL_MINUTES = 5
+
+
+def _lhb_daily_cache_path(date: str) -> Path:
+    """返回指定日期的龙虎榜缓存文件路径"""
+    return _LHB_CACHE_DIR / f"_lhb_daily_{date}.csv"
+
+
+def _cleanup_old_lhb_caches(keep_days: int = 7):
+    """清理超过 keep_days 天的旧龙虎榜缓存文件"""
+    import glob
+    import os
+    import time
+    cutoff = time.time() - keep_days * 86400
+    for f in _LHB_CACHE_DIR.glob("_lhb_daily_*.csv"):
+        try:
+            if f.stat().st_mtime < cutoff:
+                f.unlink()
+        except Exception:
+            pass
 
 
 def _lhb_type(symbol: str) -> str:
@@ -27,13 +45,11 @@ def _today_str() -> str:
     return datetime.now().strftime("%Y%m%d")
 
 
+@retry(times=2, delay=1.0)
 def _fetch_lhb_daily_sina(date: str) -> pd.DataFrame:
     """封装 AKShare stock_lhb_detail_daily_sina，位置索引映射列"""
     import akshare as ak
-    try:
-        raw = ak.stock_lhb_detail_daily_sina(date=date)
-    except Exception:
-        return pd.DataFrame()
+    raw = ak.stock_lhb_detail_daily_sina(date=date)
     if raw.empty:
         return pd.DataFrame()
     # 列序: 序号, 股票代码, 股票名称, 收盘价, 对应值(%), 成交量(万股), 成交额(万元), 解读
@@ -56,13 +72,11 @@ def _fetch_lhb_daily_sina(date: str) -> pd.DataFrame:
     return df
 
 
+@retry(times=2, delay=1.0)
 def _fetch_lhb_ggtj_sina(symbol: str = "5") -> pd.DataFrame:
     """封装 AKShare stock_lhb_ggtj_sina，5日上榜统计，位置索引映射"""
     import akshare as ak
-    try:
-        raw = ak.stock_lhb_ggtj_sina(symbol=symbol)
-    except Exception:
-        return pd.DataFrame()
+    raw = ak.stock_lhb_ggtj_sina(symbol=symbol)
     if raw.empty:
         return pd.DataFrame()
     # 列序: 股票代码, 股票名称, 上榜天数, 累计买入额(万), 累计卖出额(万), 净买入额(万), 买入席位数, 卖出席位数
@@ -89,13 +103,11 @@ def _fetch_lhb_ggtj_sina(symbol: str = "5") -> pd.DataFrame:
     return df
 
 
+@retry(times=2, delay=1.0)
 def _fetch_lhb_jgmx_sina() -> pd.DataFrame:
     """封装 AKShare stock_lhb_jgmx_sina，取当天机构席位成交明细，位置索引映射"""
     import akshare as ak
-    try:
-        raw = ak.stock_lhb_jgmx_sina()
-    except Exception:
-        return pd.DataFrame()
+    raw = ak.stock_lhb_jgmx_sina()
     if raw.empty:
         return pd.DataFrame()
     # 列序: 股票代码, 股票名称, 交易日期, 机构席位买入额(万), 机构席位卖出额(万), 说明
@@ -118,6 +130,7 @@ def _fetch_lhb_jgmx_sina() -> pd.DataFrame:
     return df
 
 
+@retry(times=2, delay=1.0)
 def _scrape_seat_detail(symbol: str, date: str) -> pd.DataFrame:
     """
     通过 Sina AJAX 接口获取个股龙虎榜席位买卖明细。
@@ -128,12 +141,9 @@ def _scrape_seat_detail(symbol: str, date: str) -> pd.DataFrame:
     import json
     url = "http://vip.stock.finance.sina.com.cn/q/api/jsonp.php/var%20details=/InvestConsultService.getLHBComBSData"
     params = {"symbol": symbol, "tradedate": date, "type": "02"}
-    try:
-        r = requests.get(url, params=params, timeout=15,
-                         headers={"Referer": "https://vip.stock.finance.sina.com.cn/"})
-        if r.status_code != 200:
-            return pd.DataFrame()
-    except Exception:
+    r = requests.get(url, params=params, timeout=15,
+                     headers={"Referer": "https://vip.stock.finance.sina.com.cn/"})
+    if r.status_code != 200:
         return pd.DataFrame()
 
     # 解析 JSONP: 去除开头注释 /*...*/ 再取 var details=({...});
@@ -189,14 +199,16 @@ def get_lhb_seat_detail(symbol: str, date: str, force_refresh: bool = False) -> 
 
 
 def get_lhb_daily(date: str | None = None, force_refresh: bool = False) -> pd.DataFrame:
-    """获取龙虎榜日榜聚合数据：行情 + 上榜天数 + 机构买卖。5min 缓存"""
+    """获取龙虎榜日榜聚合数据：行情 + 上榜天数 + 机构买卖。按日期缓存"""
     if date is None:
         date = _today_str()
 
-    if not force_refresh and _LHB_DAILY_CACHE.exists():
-        mtime = datetime.fromtimestamp(_LHB_DAILY_CACHE.stat().st_mtime)
-        if (datetime.now() - mtime).total_seconds() < _LHB_TTL_MINUTES * 60:
-            df = pd.read_csv(_LHB_DAILY_CACHE, dtype={"code": str})
+    cache_path = _lhb_daily_cache_path(date)
+
+    if not force_refresh and cache_path.exists():
+        mtime = datetime.fromtimestamp(cache_path.stat().st_mtime)
+        if (datetime.now() - mtime).total_seconds() < get_cache_ttl(5, 30) * 60:
+            df = pd.read_csv(cache_path, dtype={"code": str})
             if "date" in df.columns:
                 return df
 
@@ -230,5 +242,6 @@ def get_lhb_daily(date: str | None = None, force_refresh: bool = False) -> pd.Da
             merged[col] = 0
 
     merged["date"] = date
-    merged.to_csv(_LHB_DAILY_CACHE, index=False)
+    merged.to_csv(cache_path, index=False)
+    _cleanup_old_lhb_caches()
     return merged
