@@ -1,6 +1,6 @@
 @echo off
 title Stock Check
-cd /d "D:\CC\CC TEST"
+cd /d "%~dp0"
 
 echo Starting cache warmup in background...
 start "Cache Warmup" /min python warmup.py
