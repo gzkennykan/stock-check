@@ -43,7 +43,7 @@ def render():
         df = load_data(symbol, start_s, end_s)
         if df.empty:
             st.error(f"未能获取 {symbol} 的行情数据")
-            st.stop()
+            return
 
         strategy_map = {}
         for name, cls in STRATEGY_MAP.items():

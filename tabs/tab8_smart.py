@@ -21,13 +21,13 @@ def render():
             combined = get_combined_data(force_refresh=refresh_combined)
         except Exception as e:
             st.error(f"数据加载失败: {e}")
-            st.stop()
+            return
 
     st.caption(f"共 {len(combined)} 只股票已加载")
 
     with st.expander("🔍 多维度筛选条件", expanded=True):
-        tab_dim1, tab_dim2, tab_dim3, tab_dim4 = st.tabs([
-            "📊 行情维度", "📈 估值维度", "💰 资金维度", "🏭 行业维度"
+        tab_dim1, tab_dim2, tab_dim3, tab_dim4, tab_dim5 = st.tabs([
+            "📊 行情维度", "📈 估值维度", "💰 资金维度", "🏭 行业维度", "📋 基本面"
         ])
 
         with tab_dim1:
@@ -107,6 +107,36 @@ def render():
                 key="smart_inds",
             )
 
+        with tab_dim5:
+            fc1, fc2, fc3 = st.columns(3)
+            with fc1:
+                roe_min = st.number_input(
+                    "ROE ≥ (%)", 0.0, None, 0.0, step=0.5,
+                    help="净资产收益率下限，0=不限制", key="smart_roe"
+                )
+                gross_margin_min = st.number_input(
+                    "毛利率 ≥ (%)", 0.0, None, 0.0, step=0.5,
+                    help="毛利率下限，0=不限制", key="smart_gm"
+                )
+            with fc2:
+                rev_growth_min = st.number_input(
+                    "营收增速 ≥ (%)", -100.0, None, -100.0, step=0.5,
+                    help="营收同比增长率下限", key="smart_revg"
+                )
+                profit_growth_min = st.number_input(
+                    "利润增速 ≥ (%)", -100.0, None, -100.0, step=0.5,
+                    help="净利润同比增长率下限", key="smart_prog"
+                )
+            with fc3:
+                debt_max = st.number_input(
+                    "资产负债率 ≤ (%)", 0.0, None, 0.0, step=1.0,
+                    help="资产负债率上限，0=不限制", key="smart_debt"
+                )
+                net_margin_min = st.number_input(
+                    "净利率 ≥ (%)", 0.0, None, 0.0, step=0.5,
+                    help="净利率下限，0=不限制", key="smart_nm"
+                )
+
         st.divider()
         sc1, sc2, sc3 = st.columns(3)
         with sc1:
@@ -158,6 +188,46 @@ def render():
         top_n=int(top_n) if top_n > 0 else None,
     )
 
+    # ── 基本面后筛选 ──
+    fin_filters_active = any([
+        roe_min > 0, gross_margin_min > 0,
+        rev_growth_min > -100, profit_growth_min > -100,
+        debt_max > 0, net_margin_min > 0,
+    ])
+
+    if fin_filters_active and not result.empty:
+        from data.fundamental import fetch_financial_indicators
+
+        fin_candidates = result.head(50)
+        fin_rows = []
+        with st.spinner("正在获取基本面数据（约需30秒）..."):
+            for _, row in fin_candidates.iterrows():
+                code = str(row.get("code", ""))
+                if not code:
+                    continue
+                fdata = fetch_financial_indicators(code)
+                if fdata:
+                    fdata["_match_code"] = code
+                    fin_rows.append(fdata)
+
+        if fin_rows:
+            fin_df = pd.DataFrame(fin_rows)
+            fin_df = fin_df.rename(columns={"_match_code": "code"})
+            result = result.merge(fin_df, on="code", how="inner")
+
+            if roe_min > 0 and "roe" in result.columns:
+                result = result[result["roe"] >= roe_min]
+            if gross_margin_min > 0 and "gross_margin" in result.columns:
+                result = result[result["gross_margin"] >= gross_margin_min]
+            if rev_growth_min > -100 and "revenue_yoy" in result.columns:
+                result = result[result["revenue_yoy"] >= rev_growth_min]
+            if profit_growth_min > -100 and "profit_yoy" in result.columns:
+                result = result[result["profit_yoy"] >= profit_growth_min]
+            if debt_max > 0 and "debt_ratio" in result.columns:
+                result = result[result["debt_ratio"] <= debt_max]
+            if net_margin_min > 0 and "net_margin" in result.columns:
+                result = result[result["net_margin"] >= net_margin_min]
+
     st.subheader(f"筛选结果 ({len(result)} 只)")
 
     if result.empty:
@@ -168,6 +238,12 @@ def render():
                      "pe", "pb", "market_cap", "turnover_rate",
                      "volume", "turnover",
                      "main_capital", "hot_money", "net_flow_pct", "industry"]
+        # 添加基本面字段（如果存在）
+        extra_fin_cols = ["roe", "gross_margin", "net_margin",
+                          "revenue_yoy", "profit_yoy", "debt_ratio"]
+        for efc in extra_fin_cols:
+            if efc in display.columns:
+                cols_show.append(efc)
         cols_show = [c for c in cols_show if c in display.columns]
         display = display[cols_show]
 
@@ -195,6 +271,17 @@ def render():
                 lambda x: f"{x/10000:.1f}" if pd.notna(x) and x > 0 else "-"
             )
 
+        # 格式化基本面字段
+        for fcol, flabel in [
+            ("roe", "ROE(%)"), ("gross_margin", "毛利率(%)"),
+            ("net_margin", "净利率(%)"), ("revenue_yoy", "营收增速(%)"),
+            ("profit_yoy", "利润增速(%)"), ("debt_ratio", "负债率(%)"),
+        ]:
+            if fcol in display.columns:
+                display[flabel] = display[fcol].apply(
+                    lambda x, _col=fcol: f"{x:.1f}%" if pd.notna(x) else "N/A"
+                )
+
         display = display.rename(columns={
             "code": "代码", "name": "名称", "price": "最新价",
             "pct_change": "涨跌幅(%)", "pe": "PE(市盈率)", "pb": "PB(市净率)",
@@ -202,7 +289,9 @@ def render():
             "turnover": "成交额(元)", "industry": "行业",
         })
 
-        drop_cols = ["main_capital", "hot_money", "net_flow_pct", "market_cap"]
+        drop_cols = ["main_capital", "hot_money", "net_flow_pct", "market_cap",
+                     "roe", "gross_margin", "net_margin",
+                     "revenue_yoy", "profit_yoy", "debt_ratio"]
         display = display[[c for c in display.columns if c not in drop_cols]]
 
         st.dataframe(

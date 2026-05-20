@@ -7,8 +7,9 @@ import pandas as pd
 import numpy as np
 
 
-def plot_equity_drawdown(equity: pd.Series) -> go.Figure:
-    """资金曲线 + 回撤曲线双图"""
+def plot_equity_drawdown(equity: pd.Series, bm_equity: pd.Series = None,
+                         bm_name: str = "基准") -> go.Figure:
+    """资金曲线 + 回撤曲线双图，可选叠加基准曲线"""
     if equity is None or len(equity) == 0:
         return go.Figure()
 
@@ -23,16 +24,34 @@ def plot_equity_drawdown(equity: pd.Series) -> go.Figure:
     # 资金曲线
     fig.add_trace(go.Scatter(
         x=equity.index, y=equity.values,
-        mode="lines", name="资金",
+        mode="lines", name="策略资金",
         fill="tozeroy", fillcolor="rgba(30,136,229,0.1)",
         line=dict(color="#1E88E5", width=2),
-        hovertemplate="%{x|%Y-%m-%d}<br>资金: ¥%{y:,.0f}<extra></extra>"
+        hovertemplate="%{x|%Y-%m-%d}<br>策略: ¥%{y:,.0f}<extra></extra>"
     ), row=1, col=1)
 
-    # 初始资金参考线
-    fig.add_hline(y=equity.values[0], line_dash="dash", line_color="gray",
-                  opacity=0.5, row=1, col=1,
-                  annotation_text="初始资金")
+    # 基准曲线
+    if bm_equity is not None and len(bm_equity) > 0:
+        fig.add_trace(go.Scatter(
+            x=bm_equity.index, y=bm_equity.values,
+            mode="lines", name=bm_name,
+            line=dict(color="#FF9800", width=1.5, dash="dot"),
+            hovertemplate=f"%{{x|%Y-%m-%d}}<br>{bm_name}: ¥%{{y:,.0f}}<extra></extra>"
+        ), row=1, col=1)
+        # 收益率对比
+        strat_return = (equity / equity.iloc[0] - 1) * 100
+        bm_return = (bm_equity / bm_equity.iloc[0] - 1) * 100
+        fig.add_trace(go.Scatter(
+            x=bm_return.index, y=(strat_return - bm_return).values,
+            mode="lines", name="超额收益",
+            fill="tozeroy", fillcolor="rgba(76,175,80,0.15)",
+            line=dict(color="#4CAF50", width=1),
+            hovertemplate="%{x|%Y-%m-%d}<br>超额收益: %{y:.2f}%<extra></extra>"
+        ), row=2, col=1)
+    else:
+        fig.add_hline(y=equity.values[0], line_dash="dash", line_color="gray",
+                      opacity=0.5, row=1, col=1,
+                      annotation_text="初始资金")
 
     # 回撤曲线
     fig.add_trace(go.Scatter(
@@ -44,10 +63,11 @@ def plot_equity_drawdown(equity: pd.Series) -> go.Figure:
     ), row=2, col=1)
 
     fig.update_layout(
-        height=600, showlegend=False,
+        height=600, showlegend=bm_equity is not None and len(bm_equity) > 0,
         hovermode="x unified",
         margin=dict(l=20, r=20, t=40, b=20),
         template="plotly_white",
+        legend=dict(yanchor="top", y=0.99, xanchor="left", x=0.01),
     )
     fig.update_xaxes(rangeslider_visible=False)
     return fig

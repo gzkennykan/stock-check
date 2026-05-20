@@ -3,15 +3,18 @@
 """
 import streamlit as st
 import pandas as pd
-from data.fetcher import fetch_data
+from data.fetcher import fetch_data, fetch_benchmark
 from backtest.engine import run_backtest
-from analysis.metrics import compute_metrics
-from config import INITIAL_CASH
+from analysis.metrics import compute_metrics, compute_benchmark_metrics
+from config import INITIAL_CASH, DEFAULT_BENCHMARK
 
 
 @st.cache_data(ttl=3600)
 def load_data(symbol: str, start: str, end: str) -> pd.DataFrame:
-    return fetch_data(symbol, start, end)
+    try:
+        return fetch_data(symbol, start, end)
+    except Exception:
+        return pd.DataFrame()
 
 
 def get_equity_curve(strat) -> pd.Series | None:
@@ -41,8 +44,9 @@ def get_daily_returns(strat) -> list[float]:
         return []
 
 
-def run_single_backtest(symbol, strategy_cls, params, start, end):
-    """运行回测并返回 metrics + charts 数据"""
+def run_single_backtest(symbol, strategy_cls, params, start, end,
+                        benchmark_code: str = DEFAULT_BENCHMARK):
+    """运行回测并返回 metrics + charts 数据（含基准对比）"""
     df = load_data(symbol, start, end)
     if df.empty:
         st.error(f"未能获取 {symbol} 的行情数据")
@@ -62,11 +66,35 @@ def run_single_backtest(symbol, strategy_cls, params, start, end):
         start_value=result["start_value"], end_value=result["end_value"],
         trades_result=result.get("trades"),
     )
+
+    # 获取基准数据
+    benchmark_df = None
+    benchmark_metrics = None
+    bm_equity = None
+    try:
+        benchmark_df = fetch_benchmark(benchmark_code, start, end)
+        if benchmark_df is not None and not benchmark_df.empty and equity is not None:
+            bm_metrics = compute_benchmark_metrics(
+                equity, benchmark_df["close"],
+                INITIAL_CASH, f"沪深300" if benchmark_code == "000300" else benchmark_code,
+            )
+            if bm_metrics is not None:
+                benchmark_metrics = bm_metrics
+                # 构建基准权益曲线用于图表叠加
+                common_dates = equity.index.intersection(benchmark_df.index)
+                if len(common_dates) >= 2:
+                    bm_aligned = benchmark_df["close"].loc[common_dates]
+                    bm_equity = INITIAL_CASH * (bm_aligned / bm_aligned.iloc[0])
+    except Exception:
+        pass
+
     return {
         "metrics": metrics,
         "equity": equity,
         "df": df,
         "result": result,
+        "benchmark_metrics": benchmark_metrics,
+        "bm_equity": bm_equity,
     }
 
 
@@ -93,7 +121,34 @@ def display_metric_cards(metrics):
     with c7:
         st.metric("交易次数", metrics.total_trades)
     with c8:
-        st.metric("Calmar", f"{metrics.calmar_ratio:.2f}" if metrics.calmar_ratio else "N/A")
+        st.metric("卡玛比率", f"{metrics.calmar_ratio:.2f}" if metrics.calmar_ratio else "N/A")
+
+
+def display_benchmark_metrics(bm):
+    """显示基准对比指标卡片行"""
+    if bm is None:
+        return
+    c1, c2, c3, c4 = st.columns(4)
+    with c1:
+        st.metric("超额收益 (vs 基准)", f"{bm.excess_return:+.2%}")
+    with c2:
+        st.metric("Alpha (年化)", f"{bm.alpha:+.2%}")
+    with c3:
+        st.metric("Beta", f"{bm.beta:.2f}")
+    with c4:
+        ir_str = f"{bm.information_ratio:.2f}" if bm.information_ratio else "N/A"
+        st.metric("信息比率", ir_str)
+
+    c5, c6, c7, c8 = st.columns(4)
+    with c5:
+        te_str = f"{bm.tracking_error:.2%}" if bm.tracking_error else "N/A"
+        st.metric("跟踪误差", te_str)
+    with c6:
+        st.metric("基准累计收益", f"{bm.benchmark_return:.2%}")
+    with c7:
+        st.metric("基准年化收益", f"{bm.benchmark_annual_return:.2%}")
+    with c8:
+        st.caption(f"基准: {bm.benchmark_name}")
 
 
 def get_trade_list(strat) -> pd.DataFrame:

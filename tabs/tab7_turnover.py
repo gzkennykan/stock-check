@@ -29,7 +29,7 @@ def render():
                 display_turn = get_top_turnover(50).copy()
         except Exception as e:
             st.error(f"获取成交额排行失败: {e}")
-            st.stop()
+            return
 
     if not display_turn.empty:
         display_turn["price"] = display_turn["price"].round(2)

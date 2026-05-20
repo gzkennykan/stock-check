@@ -29,7 +29,7 @@ def render():
                 display_flow = get_top_capital_inflow(50).copy()
         except Exception as e:
             st.error(f"获取资金流向失败: {e}")
-            st.stop()
+            return
 
     if not display_flow.empty:
         display_flow["price"] = display_flow["price"].round(2)

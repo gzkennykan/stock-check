@@ -78,6 +78,61 @@ def retry_call(func, *args, times: int = 2, delay: float = 1.0, **kwargs):
     return None
 
 
+# ════════════════ 加固 HTTP 请求 ════════════════
+
+import random
+import requests as _requests
+
+_USER_AGENTS = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36 Edg/125.0.0.0",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_5) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Safari/605.1.15",
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:128.0) Gecko/20100101 Firefox/128.0",
+]
+
+
+def _random_ua() -> str:
+    return random.choice(_USER_AGENTS)
+
+
+def resilient_session() -> _requests.Session:
+    """创建带 UA 轮换和基础请求头的 Session"""
+    s = _requests.Session()
+    s.headers.update({
+        "User-Agent": _random_ua(),
+        "Accept": "application/json, text/plain, */*",
+        "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+        "Accept-Encoding": "gzip, deflate, br",
+        "Cache-Control": "no-cache",
+    })
+    return s
+
+
+def resilient_get(url: str, params: dict = None, timeout: int = 30,
+                  max_retries: int = 3, base_delay: float = 1.0,
+                  session: _requests.Session | None = None,
+                  **kwargs) -> _requests.Response:
+    """
+    带指数退避和 UA 轮换的 GET 请求。
+
+    Args:
+        max_retries: 最大重试次数（不含首次）
+        base_delay: 基础退避延迟（秒），每次重试翻倍
+        session: 可选，共用 Session 以复用连接
+    """
+    s = session or resilient_session()
+    for attempt in range(max_retries + 1):
+        try:
+            if attempt > 0:
+                s.headers["User-Agent"] = _random_ua()
+            return s.get(url, params=params, timeout=timeout, **kwargs)
+        except Exception:
+            if attempt == max_retries:
+                raise
+            time.sleep(base_delay * (2 ** attempt) + random.uniform(0, 0.5))
+
+
 # ════════════════ 金额格式化 ════════════════
 
 def fmt_yuan(val: float, signed: bool = False) -> str:

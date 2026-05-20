@@ -47,87 +47,84 @@ def _today_str() -> str:
 
 @retry(times=2, delay=1.0)
 def _fetch_lhb_daily_sina(date: str) -> pd.DataFrame:
-    """封装 AKShare stock_lhb_detail_daily_sina，位置索引映射列"""
+    """封装 AKShare stock_lhb_detail_daily_sina，按位置索引映射列（避免列名编码问题）"""
     import akshare as ak
-    raw = ak.stock_lhb_detail_daily_sina(date=date)
-    if raw.empty:
+    try:
+        raw = ak.stock_lhb_detail_daily_sina(date=date)
+    except Exception as e:
+        raise RuntimeError(f"AKShare 龙虎榜接口调用失败: {e}")
+
+    if raw is None or raw.empty:
         return pd.DataFrame()
-    # 列序: 序号, 股票代码, 股票名称, 收盘价, 对应值(%), 成交量(万股), 成交额(万元), 解读
-    cols = raw.columns.tolist()
-    df = raw.copy()
-    code_col = cols[1] if len(cols) > 1 else None
-    df = df.rename(columns={
-        cols[1]: "code", cols[2]: "name",
-        cols[3]: "close", cols[4]: "pct_change",
-        cols[5]: "volume", cols[6]: "turnover",
-        cols[7]: "reason",
-    })
-    df = df[["code", "name", "close", "pct_change", "volume", "turnover", "reason"]].copy()
-    df["code"] = df["code"].astype(str).str.strip()
-    for c in ["close", "pct_change", "turnover", "volume"]:
-        df[c] = pd.to_numeric(df[c], errors="coerce")
-    # 同一只股票可能因多个原因上榜（日偏离+累计偏离等），
-    # 按成交额降序去重，保留成交最大的那条（核心上榜原因）
+
+    # 按位置取列，不依赖列名（避免编码问题）
+    ncols = raw.shape[1]
+    if ncols < 8:
+        return pd.DataFrame()
+
+    df = pd.DataFrame()
+    df["code"] = raw.iloc[:, 1].astype(str).str.strip()
+    df["name"] = raw.iloc[:, 2].astype(str).str.strip()
+    df["close"] = pd.to_numeric(raw.iloc[:, 3], errors="coerce")
+    df["pct_change"] = pd.to_numeric(raw.iloc[:, 4], errors="coerce")
+    df["volume"] = pd.to_numeric(raw.iloc[:, 5], errors="coerce")
+    df["turnover"] = pd.to_numeric(raw.iloc[:, 6], errors="coerce")
+    df["reason"] = raw.iloc[:, 7].astype(str).str.strip()
+
     df = df.sort_values("turnover", ascending=False).drop_duplicates(subset="code", keep="first")
     return df
 
 
 @retry(times=2, delay=1.0)
 def _fetch_lhb_ggtj_sina(symbol: str = "5") -> pd.DataFrame:
-    """封装 AKShare stock_lhb_ggtj_sina，5日上榜统计，位置索引映射"""
+    """封装 AKShare stock_lhb_ggtj_sina，按位置索引映射列"""
     import akshare as ak
-    raw = ak.stock_lhb_ggtj_sina(symbol=symbol)
-    if raw.empty:
+    try:
+        raw = ak.stock_lhb_ggtj_sina(symbol=symbol)
+    except Exception:
         return pd.DataFrame()
-    # 列序: 股票代码, 股票名称, 上榜天数, 累计买入额(万), 累计卖出额(万), 净买入额(万), 买入席位数, 卖出席位数
-    cols = raw.columns.tolist()
-    df = raw.copy()
-    df = df.rename(columns={
-        cols[0]: "code",
-        cols[2]: "onboard_days",
-        cols[3]: "accum_buy",
-        cols[4]: "accum_sell",
-        cols[5]: "net_buy",
-        cols[6]: "buy_seat_count",
-        cols[7]: "sell_seat_count",
-    })
-    df = df[["code", "onboard_days", "accum_buy", "accum_sell",
-             "net_buy", "buy_seat_count", "sell_seat_count"]].copy()
-    df["code"] = df["code"].astype(str).str.strip()
+
+    if raw is None or raw.empty or raw.shape[1] < 8:
+        return pd.DataFrame()
+
+    df = pd.DataFrame()
+    df["code"] = raw.iloc[:, 0].astype(str).str.strip()
+    df["onboard_days"] = pd.to_numeric(raw.iloc[:, 2], errors="coerce")
+    df["accum_buy"] = pd.to_numeric(raw.iloc[:, 3], errors="coerce")
+    df["accum_sell"] = pd.to_numeric(raw.iloc[:, 4], errors="coerce")
+    df["net_buy"] = pd.to_numeric(raw.iloc[:, 5], errors="coerce")
+    df["buy_seat_count"] = pd.to_numeric(raw.iloc[:, 6], errors="coerce")
+    df["sell_seat_count"] = pd.to_numeric(raw.iloc[:, 7], errors="coerce")
+
     for c in df.columns:
         if c != "code":
-            df[c] = pd.to_numeric(df[c], errors="coerce")
-    # 同一股票可能有多条5日统计（不同上榜天数窗口），
-    # 按上榜天数降序去重，保留最完整的记录
+            df[c] = df[c].fillna(0)
     df = df.sort_values("onboard_days", ascending=False).drop_duplicates(subset="code", keep="first")
     return df
 
 
 @retry(times=2, delay=1.0)
 def _fetch_lhb_jgmx_sina() -> pd.DataFrame:
-    """封装 AKShare stock_lhb_jgmx_sina，取当天机构席位成交明细，位置索引映射"""
+    """封装 AKShare stock_lhb_jgmx_sina，按位置索引映射列"""
     import akshare as ak
-    raw = ak.stock_lhb_jgmx_sina()
-    if raw.empty:
+    try:
+        raw = ak.stock_lhb_jgmx_sina()
+    except Exception:
         return pd.DataFrame()
-    # 列序: 股票代码, 股票名称, 交易日期, 机构席位买入额(万), 机构席位卖出额(万), 说明
-    cols = raw.columns.tolist()
-    df = raw.copy()
-    df = df.rename(columns={
-        cols[0]: "code",
-        cols[2]: "date",
-        cols[3]: "inst_buy",
-        cols[4]: "inst_sell",
-    })
-    df = df[["code", "date", "inst_buy", "inst_sell"]].copy()
-    df["code"] = df["code"].astype(str).str.strip()
-    for c in ["inst_buy", "inst_sell"]:
-        df[c] = pd.to_numeric(df[c], errors="coerce")
+
+    if raw is None or raw.empty or raw.shape[1] < 5:
+        return pd.DataFrame()
+
+    df = pd.DataFrame()
+    df["code"] = raw.iloc[:, 0].astype(str).str.strip()
+    df["date"] = raw.iloc[:, 2].astype(str).str.strip()
+    df["inst_buy"] = pd.to_numeric(raw.iloc[:, 3], errors="coerce")
+    df["inst_sell"] = pd.to_numeric(raw.iloc[:, 4], errors="coerce")
+
     # 过滤当天
     today_match = datetime.now().strftime("%Y-%m-%d")
     df = df[df["date"] == today_match]
-    df = df.drop(columns=["date"])
-    return df
+    return df.drop(columns=["date"])
 
 
 @retry(times=2, delay=1.0)

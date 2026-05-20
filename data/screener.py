@@ -14,7 +14,7 @@ _CACHE_FILE = _CACHE_DIR / "_screener_cache.csv"
 _CACHE_TTL_MINUTES = 5  # 缓存5分钟，避免频繁请求
 
 _INDUSTRY_CACHE_FILE = _CACHE_DIR / "_industry_mapping.csv"
-_INDUSTRY_TTL_HOURS = 24  # 行业分类不常变，缓存1天
+_INDUSTRY_TTL_HOURS = 168  # 行业分类极少变动，缓存7天
 
 _FUND_FLOW_CACHE_FILE = _CACHE_DIR / "_fund_flow_cache.csv"
 _FUND_FLOW_TTL_MINUTES = 5
@@ -225,11 +225,24 @@ def _map_sw_code_to_names(code: str) -> list[str]:
 
 def _build_industry_mapping() -> dict:
     """从申万行业分类构建 股票代码→行业名称列表 映射（取每只股票最新分类）"""
+    import requests
+    import urllib3
+    urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+    _original_send = requests.Session.send
+
+    def _patched_send(self, request, **kwargs):
+        kwargs["verify"] = False
+        return _original_send(self, request, **kwargs)
+
     try:
         import akshare as ak
+        requests.Session.send = _patched_send
         df = ak.stock_industry_clf_hist_sw()
     except Exception:
         return {}
+    finally:
+        requests.Session.send = _original_send
 
     if df.empty:
         return {}
@@ -253,11 +266,12 @@ def _load_industry_mapping() -> dict:
         age_sec = (datetime.now() - datetime.fromtimestamp(
             _INDUSTRY_CACHE_FILE.stat().st_mtime)).total_seconds()
         if age_sec < _INDUSTRY_TTL_HOURS * 3600:
-            mapping: dict[str, list[str]] = {}
             df = pd.read_csv(_INDUSTRY_CACHE_FILE, dtype={"code": str, "industry": str})
-            for _, row in df.iterrows():
-                mapping.setdefault(row["code"], []).append(row["industry"])
-            return mapping
+            if "code" in df.columns and "industry" in df.columns:
+                mapping: dict[str, list[str]] = {}
+                for _, row in df.iterrows():
+                    mapping.setdefault(row["code"], []).append(row["industry"])
+                return mapping
 
     mapping = _build_industry_mapping()
     if mapping:
@@ -426,6 +440,8 @@ def _fetch_all_fund_flow() -> pd.DataFrame:
     all_pages = [pd.read_html(StringIO(r.text))[0]]
 
     # 获取剩余页
+    import random as _random
+    import time as _time
     for page in range(2, total_pages + 1):
         v_code = _get_v_code()
         headers["hexin-v"] = v_code
@@ -435,6 +451,7 @@ def _fetch_all_fund_flow() -> pd.DataFrame:
                 all_pages.append(pd.read_html(StringIO(r.text))[0])
         except Exception:
             continue
+        _time.sleep(_random.uniform(0.2, 0.6))  # 分页节流，降低触发风控概率
 
     df = pd.concat(all_pages, ignore_index=True)
     # 列名: 序号, 股票代码, 股票名称, 最新价, 涨跌幅, 净流量, 主力资金(元), 游资(元), 散户(元), 成交量(元)
@@ -547,9 +564,12 @@ def get_combined_data(force_refresh: bool = False) -> pd.DataFrame:
     # 3. 行业分类
     try:
         mapping = _load_industry_mapping()
-        ind_rows = [{"code": c, "industry": ", ".join(inds)}
-                    for c, inds in mapping.items()]
-        industry_df = pd.DataFrame(ind_rows)
+        if mapping:
+            ind_rows = [{"code": c, "industry": ", ".join(inds)}
+                        for c, inds in mapping.items()]
+            industry_df = pd.DataFrame(ind_rows)
+        else:
+            industry_df = pd.DataFrame(columns=["code", "industry"])
     except Exception:
         industry_df = pd.DataFrame(columns=["code", "industry"])
 
@@ -604,6 +624,7 @@ def _fetch_profitability_data(force_refresh: bool = False) -> pd.DataFrame:
             return pd.read_csv(_PROFIT_CACHE_FILE, dtype={"code": str})
 
     import akshare as ak
+    import random as _random
     # 取最近季度末日期（Q1=0331, Q2=0630, Q3=0930, Q4=1231）
     today = datetime.now()
     year, month = today.year, today.month
@@ -615,22 +636,35 @@ def _fetch_profitability_data(force_refresh: bool = False) -> pd.DataFrame:
             break
     if report_date is None:
         report_date = f"{year - 1}1231"
-    raw = retry_call(ak.stock_yjbb_em, date=report_date, times=2, delay=1.0)
+
+    # 指数退避重试：3 次，间隔 1s/2s/4s + 随机抖动
+    raw = None
+    for attempt in range(3):
+        try:
+            raw = ak.stock_yjbb_em(date=report_date)
+            if raw is not None and not raw.empty:
+                break
+        except Exception:
+            if attempt < 2:
+                import time as _time
+                _time.sleep((2 ** attempt) + _random.uniform(0, 1))
+            raw = None
+
     if raw is None:
         # 回退到上一季度
         for qm, qd in reversed(quarters):
             fallback = f"{year}{qd}"
             if fallback < report_date:
-                raw = retry_call(ak.stock_yjbb_em, date=fallback, times=1, delay=1.0)
-                if raw is not None:
-                    break
+                try:
+                    raw = ak.stock_yjbb_em(date=fallback)
+                    if raw is not None and not raw.empty:
+                        break
+                except Exception:
+                    raw = None
         if raw is None:
             if _PROFIT_CACHE_FILE.exists():
                 return pd.read_csv(_PROFIT_CACHE_FILE, dtype={"code": str})
             return pd.DataFrame(columns=["code", "roe", "profit_growth", "gross_margin"])
-        if _PROFIT_CACHE_FILE.exists():
-            return pd.read_csv(_PROFIT_CACHE_FILE, dtype={"code": str})
-        return pd.DataFrame(columns=["code", "roe", "profit_growth", "gross_margin"])
 
     if raw.empty:
         return pd.DataFrame(columns=["code", "roe", "profit_growth", "gross_margin"])

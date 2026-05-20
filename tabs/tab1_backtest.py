@@ -1,7 +1,7 @@
 """Tab 1: 单策略回测"""
 import streamlit as st
 from datetime import datetime
-from backtest_utils import run_single_backtest, display_metric_cards, get_trade_list
+from backtest_utils import run_single_backtest, display_metric_cards, display_benchmark_metrics, get_trade_list
 from visualization.plotly_charts import plot_equity_drawdown, plot_kline
 
 
@@ -40,7 +40,8 @@ def render():
             start_s = start_date.strftime("%Y-%m-%d")
             end_s = end_date.strftime("%Y-%m-%d")
             with st.spinner(f"获取 {symbol} 行情数据并运行回测..."):
-                data = run_single_backtest(symbol, strategy_cls, params, start_s, end_s)
+                bm_code = st.session_state.get("benchmark", "000300")
+                data = run_single_backtest(symbol, strategy_cls, params, start_s, end_s, bm_code)
 
             if data:
                 st.session_state["backtest_data"] = data
@@ -48,7 +49,7 @@ def render():
                 st.success(f"回测完成 — {symbol} ({start_s} ~ {end_s})")
                 st.rerun()
             else:
-                st.stop()
+                return
 
     # ── 显示结果 ──
     if "backtest_data" not in st.session_state:
@@ -71,8 +72,14 @@ def render():
 
     display_metric_cards(data["metrics"])
 
+    # 基准对比指标
+    if data.get("benchmark_metrics"):
+        st.subheader("基准对比")
+        display_benchmark_metrics(data["benchmark_metrics"])
+
     st.subheader("资金曲线 & 回撤")
-    fig1 = plot_equity_drawdown(data["equity"])
+    fig1 = plot_equity_drawdown(data["equity"], data.get("bm_equity"),
+                                data["benchmark_metrics"].benchmark_name if data.get("benchmark_metrics") else "基准")
     st.plotly_chart(fig1, use_container_width=True)
 
     st.subheader("K线图")

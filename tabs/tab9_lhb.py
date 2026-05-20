@@ -33,11 +33,11 @@ def render():
             lhb_df = get_lhb_daily(date=lhb_date_str, force_refresh=refresh_lhb)
         except Exception as e:
             st.error(f"获取龙虎榜数据失败: {e}")
-            st.stop()
+            return
 
     if lhb_df.empty:
         st.warning(f"{lhb_date_str} 暂无龙虎榜上榜数据（可能非交易日或数据未更新）")
-        st.stop()
+        return
 
     st.caption(f"共 {len(lhb_df)} 只上榜股票")
 
@@ -52,7 +52,7 @@ def render():
         ]
         if df_display.empty:
             st.info(f"未找到匹配 '{search_lhb}' 的上榜股票")
-            st.stop()
+            return
 
     tbl = df_display.copy()
     tbl["close"] = tbl["close"].round(2)

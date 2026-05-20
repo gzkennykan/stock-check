@@ -1,5 +1,5 @@
 """
-股票量化回测系统 — Streamlit 可视化界面
+WinnerK股票量化系统 — Streamlit 可视化界面
 运行: streamlit run app.py
 """
 import sys
@@ -14,7 +14,7 @@ from strategies import MACrossStrategy, MACDStrategy, RSIStrategy
 from strategies import BollingerStrategy, TripleMAStrategy, KDJStrategy
 from strategies import DonchianStrategy, ATRStrategy
 
-st.set_page_config(page_title="股票量化回测系统", page_icon="📈", layout="wide")
+st.set_page_config(page_title="WinnerK股票量化系统", page_icon="📈", layout="wide")
 
 STRATEGY_MAP = {
     "双均线 (MA Cross)": MACrossStrategy,
@@ -37,7 +37,7 @@ HOT_STOCKS = {
 
 # =========================== 侧边栏 ===========================
 
-st.sidebar.title("📈 股票量化回测系统")
+st.sidebar.title("📈 WinnerK股票量化系统")
 
 # ── 工作模式切换 ──
 if "work_mode" not in st.session_state:
@@ -124,6 +124,9 @@ if st.session_state.work_mode == "回测":
     initial_cash = st.sidebar.number_input("初始资金 (元)", value=1000000, step=100000)
     st.session_state["initial_cash"] = initial_cash
 
+    benchmark = st.sidebar.selectbox("对比基准", ["沪深300", "中证500"], index=0)
+    st.session_state["benchmark"] = "000300" if benchmark == "沪深300" else "000905"
+
     if st.sidebar.button("🚀 运行回测", type="primary", use_container_width=True):
         st.session_state["run_backtest"] = True
 
@@ -150,10 +153,10 @@ else:
 
 # =========================== 主区域 Tab 路由 ===========================
 
-tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10 = st.tabs([
+tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10, tab11, tab12, tab13, tab14 = st.tabs([
     "📊 单策略回测", "📋 策略对比", "🔧 参数优化", "🔍 选股池",
     "💰 资金流入TOP50", "💸 资金流出TOP50", "📈 成交额TOP50",
-    "🧠 智能选股", "🐉 龙虎榜", "🔥 值博率",
+    "🧠 智能选股", "🐉 龙虎榜", "🔥 值博率", "🧺 组合回测", "🌏 北向资金", "📊 财务分析", "🏭 行业轮动",
 ])
 
 from tabs.tab1_backtest import render as render_tab1
@@ -166,6 +169,10 @@ from tabs.tab7_turnover import render as render_tab7
 from tabs.tab8_smart import render as render_tab8
 from tabs.tab9_lhb import render as render_tab9
 from tabs.tab10_upside import render as render_tab10
+from tabs.tab11_portfolio import render as render_tab11
+from tabs.tab12_northbound import render as render_tab12
+from tabs.tab13_fundamental import render as render_tab13
+from tabs.tab14_industry import render as render_tab14
 
 with tab1:
     render_tab1()
@@ -196,3 +203,15 @@ with tab9:
 
 with tab10:
     render_tab10()
+
+with tab11:
+    render_tab11()
+
+with tab12:
+    render_tab12()
+
+with tab13:
+    render_tab13()
+
+with tab14:
+    render_tab14()

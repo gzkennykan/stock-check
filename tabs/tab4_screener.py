@@ -19,11 +19,11 @@ def render():
             full_df = get_stock_list(force_refresh=refresh)
         except Exception as e:
             st.error(f"获取行情数据失败: {e}")
-            st.stop()
+            return
 
     if full_df.empty:
         st.warning("未能获取到股票数据，请检查网络后刷新重试")
-        st.stop()
+        return
 
     st.caption(f"共 {len(full_df)} 只股票，数据时间: {datetime.now().strftime('%H:%M:%S')}")
 

@@ -30,45 +30,9 @@ def _fetch_akshare_sina(symbol: str, start: str, end: str) -> pd.DataFrame:
     return df
 
 
-def _fetch_akshare_eastmoney(symbol: str, start: str, end: str) -> pd.DataFrame:
-    """通过 AKShare 的 stock_zh_a_hist (东方财富源) 获取 A 股日线（备用）"""
-    import akshare as ak
-    raw = ak.stock_zh_a_hist(symbol=symbol, period="daily",
-                             start_date=start, end_date=end, adjust="qfq")
-    rename = {}
-    for cn, en in {"日期": "date", "开盘": "open", "最高": "high",
-                    "最低": "low", "收盘": "close", "成交量": "volume"}.items():
-        if cn in raw.columns:
-            rename[cn] = en
-    if rename:
-        raw = raw.rename(columns=rename)
-    date_col = "date" if "date" in raw.columns else raw.columns[0]
-    if date_col != "date":
-        raw = raw.rename(columns={date_col: "date"})
-    raw["date"] = pd.to_datetime(raw["date"])
-    raw = raw.set_index("date")
-    raw = raw[["open", "high", "low", "close", "volume"]]
-    raw = raw.sort_index()
-    return raw
-
-
 def _fetch_akshare(symbol: str, start: str, end: str) -> pd.DataFrame:
-    """A 股数据获取：优先新浪源，失败则尝试东方财富源"""
-    errors = []
-
-    # 优先使用新浪源（更稳定）
-    try:
-        return _fetch_akshare_sina(symbol, start, end)
-    except Exception as e:
-        errors.append(f"新浪源: {e}")
-
-    # 备用东方财富源
-    try:
-        return _fetch_akshare_eastmoney(symbol, start, end)
-    except Exception as e:
-        errors.append(f"东方财富源: {e}")
-
-    raise RuntimeError(f"无法获取 {symbol} 的真实行情数据:\n  " + "\n  ".join(errors))
+    """A 股数据获取：新浪源（东方财富 push2 已被封禁，不再回退）"""
+    return _fetch_akshare_sina(symbol, start, end)
 
 
 def _fetch_yfinance(symbol: str, start: str, end: str) -> pd.DataFrame:
@@ -89,6 +53,27 @@ def _fetch_yfinance(symbol: str, start: str, end: str) -> pd.DataFrame:
     })
     df = df[["open", "high", "low", "close", "volume"]]
     return df
+
+
+def fetch_benchmark(symbol: str, start: str, end: str, use_cache: bool = True) -> pd.DataFrame:
+    """
+    获取基准指数日线数据（如沪深300=000300, 中证500=000905）。
+
+    返回的 DataFrame 包含 close 列，用于计算基准收益率曲线。
+    """
+    import akshare as ak
+    try:
+        raw = ak.stock_zh_a_daily(
+            symbol=_symbol_to_sina(symbol),
+            start_date=start, end_date=end, adjust="qfq"
+        )
+        df = raw.copy()
+        df["date"] = pd.to_datetime(df["date"])
+        df = df.set_index("date")
+        df = df[["close"]].sort_index()
+        return df
+    except Exception as e:
+        raise RuntimeError(f"获取基准指数 {symbol} 失败: {e}")
 
 
 def _detect_source(symbol: str) -> str:

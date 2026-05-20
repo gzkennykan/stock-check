@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 """
-股票量化回测系统 — 命令行入口
+WinnerK股票量化系统 — 命令行入口
 
 使用示例:
   python main.py --symbol 600036 --strategy ma_cross --start 2023-01-01 --end 2024-12-31 --plot
@@ -27,7 +27,7 @@ STRATEGY_MAP = {
 
 
 def parse_args():
-    p = argparse.ArgumentParser(description="股票量化回测系统")
+    p = argparse.ArgumentParser(description="WinnerK股票量化系统")
     p.add_argument("--symbol", type=str, default="600036", help="股票代码 (默认 600036)")
     p.add_argument("--symbols", type=str, default=None, help="多股票对比, 逗号分隔 e.g. 600036,000001")
     p.add_argument("--strategy", type=str, default="ma_cross",

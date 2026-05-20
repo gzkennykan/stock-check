@@ -118,3 +118,77 @@ def compute_metrics(returns: list[float] | None,
         start_value=start_value,
         end_value=end_value,
     )
+
+
+@dataclass
+class BenchmarkResult:
+    benchmark_return: float
+    benchmark_annual_return: float
+    alpha: float
+    beta: float
+    information_ratio: float | None
+    tracking_error: float | None
+    excess_return: float
+    benchmark_name: str
+
+
+def compute_benchmark_metrics(
+    strategy_equity: pd.Series,
+    benchmark_close: pd.Series,
+    initial_cash: float,
+    benchmark_name: str = "基准",
+) -> BenchmarkResult | None:
+    if strategy_equity is None or benchmark_close is None:
+        return None
+    if len(strategy_equity) < 2 or len(benchmark_close) < 2:
+        return None
+
+    common_dates = strategy_equity.index.intersection(benchmark_close.index)
+    if len(common_dates) < 2:
+        return None
+
+    eq_aligned = strategy_equity.loc[common_dates]
+    bm_aligned = benchmark_close.loc[common_dates]
+
+    bm_equity = initial_cash * (bm_aligned / bm_aligned.iloc[0])
+
+    strat_rets = eq_aligned.pct_change().dropna()
+    bm_rets = bm_equity.pct_change().dropna()
+
+    common = strat_rets.index.intersection(bm_rets.index)
+    if len(common) < 2:
+        return None
+    strat_rets = strat_rets.loc[common]
+    bm_rets = bm_rets.loc[common]
+
+    cov_matrix = np.cov(strat_rets, bm_rets)
+    beta = cov_matrix[0, 1] / cov_matrix[1, 1] if cov_matrix[1, 1] > 0 else 1.0
+
+    days = (common[-1] - common[0]).days
+    years = max(days / 365.0, 1 / 252)
+
+    strat_total = eq_aligned.iloc[-1] / eq_aligned.iloc[0] - 1
+    bm_total = bm_equity.iloc[-1] / bm_equity.iloc[0] - 1
+    strat_annual = (1 + strat_total) ** (1.0 / years) - 1
+    bm_annual = (1 + bm_total) ** (1.0 / years) - 1
+
+    alpha = strat_annual - beta * bm_annual
+
+    excess_rets = strat_rets - bm_rets
+    tracking_error = float(excess_rets.std() * np.sqrt(252)) if len(excess_rets) > 1 else None
+
+    information_ratio = None
+    if tracking_error and tracking_error > 0:
+        excess_annual = strat_annual - bm_annual
+        information_ratio = excess_annual / tracking_error
+
+    return BenchmarkResult(
+        benchmark_return=bm_total,
+        benchmark_annual_return=bm_annual,
+        alpha=alpha,
+        beta=beta,
+        information_ratio=information_ratio,
+        tracking_error=tracking_error,
+        excess_return=strat_total - bm_total,
+        benchmark_name=benchmark_name,
+    )

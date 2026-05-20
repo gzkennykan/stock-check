@@ -25,7 +25,7 @@ def render():
             v_data = get_combined_data(force_refresh=v_refresh)
         except Exception as e:
             st.error(f"数据加载失败: {e}")
-            st.stop()
+            return
 
     if v_market == "上海":
         v_data = v_data[v_data["code"].str.startswith("6")]
