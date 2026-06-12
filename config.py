@@ -10,6 +10,9 @@ ROOT_DIR = Path(__file__).parent
 DATA_DIR = ROOT_DIR / "data_cache"
 DATA_DIR.mkdir(exist_ok=True)
 
+# DuckDB 数据库路径
+DB_PATH = DATA_DIR / "stock_system.duckdb"
+
 # 回测默认参数
 INITIAL_CASH = 1_000_000.0      # 初始资金
 COMMISSION_RATE = 0.0003        # 佣金率 (万三)

@@ -690,113 +690,6 @@ def _fetch_profitability_data(force_refresh: bool = False) -> pd.DataFrame:
     return df
 
 
-def _compute_upside_score(df: pd.DataFrame) -> pd.Series:
-    """
-    上涨值博率评分（0-100 分）
-
-    因子权重:
-      - 资金流入强度: 27%  主力+游资净买金额，对数标准化
-      - 净流入占比:   17%  净流量 / 成交额，越高越好
-      - 涨幅合理性:   16%  0~5% 最佳，追高风险扣分
-      - 技术面:       15%  日内强势度 + 振幅健康 + 量能效率
-      - 换手活跃度:   10%  2~10% 为佳，过冷过热都扣分
-      - 盈利能力:     10%  ROE + 净利润增长 + 毛利率
-      - 估值合理:      5%  PE 0~50，排除亏损/泡沫
-    """
-    idx = df.index
-
-    # ── 1. 资金流入强度 (0-27) ──
-    total_inflow = df.get("main_capital", pd.Series(0, index=idx)).fillna(0) + \
-                   df.get("hot_money", pd.Series(0, index=idx)).fillna(0)
-    inflow_pos = total_inflow.clip(lower=0)
-    log_inflow = np.log10(inflow_pos + 1)
-    inflow_score = (log_inflow / 9.0 * 27).clip(0, 27)
-
-    # ── 2. 净流入占比 (0-17) ──
-    net_pct = df.get("net_flow_pct", pd.Series(0, index=idx)).fillna(0).clip(0, 20)
-    pct_score = (net_pct / 20 * 17).clip(0, 17)
-
-    # ── 3. 涨幅合理性 (0-16) ──
-    pct_change = df.get("pct_change", pd.Series(0, index=idx)).fillna(0)
-    chg_score = pd.Series(0.0, index=idx)
-    chg_score[(pct_change >= 0) & (pct_change < 3)] = 16
-    chg_score[(pct_change >= 3) & (pct_change < 5)] = 12
-    chg_score[(pct_change >= -2) & (pct_change < 0)] = 9
-    chg_score[(pct_change >= 5) & (pct_change < 8)] = 6
-    chg_score[(pct_change >= -5) & (pct_change < -2)] = 4
-    chg_score[pct_change >= 8] = 2
-    chg_score[pct_change < -5] = 2
-
-    # ── 4. 技术面 (0-15) ──
-    high = df.get("high", pd.Series(0, index=idx)).fillna(0)
-    low = df.get("low", pd.Series(0, index=idx)).fillna(0)
-    price = df.get("price", pd.Series(0, index=idx)).fillna(0)
-    prev_close = df.get("prev_close", pd.Series(0, index=idx)).fillna(0)
-    tr = df.get("turnover_rate", pd.Series(0, index=idx)).fillna(0)
-
-    # 4a. 日内强势度 (0-6)：收盘在日内高低区间的位置
-    hl_range = (high - low).replace(0, np.nan)
-    intraday_strength = ((price - low) / hl_range * 6).fillna(3).clip(0, 6)
-
-    # 4b. 振幅健康 (0-5)：振幅 2%~8% 最佳
-    amplitude = ((high - low) / prev_close.replace(0, np.nan) * 100).fillna(0)
-    amp_score = pd.Series(0.0, index=idx)
-    amp_score[amplitude.between(2, 8)] = 5
-    amp_score[amplitude.between(1, 2) | amplitude.between(8, 12)] = 3
-    amp_score[amplitude.between(0.5, 1)] = 1
-
-    # 4c. 量能效率 (0-4)：每单位换手推动的涨幅（正向），效率越高越好
-    eff = (pct_change.abs() / tr.replace(0, np.nan) * 100).fillna(0).clip(0, 50)
-    eff_score = pd.Series(0.0, index=idx)
-    eff_score[eff >= 5] = 4
-    eff_score[eff.between(2, 5)] = 3
-    eff_score[eff.between(1, 2)] = 2
-    eff_score[eff.between(0.3, 1)] = 1
-
-    # ── 5. 换手活跃度 (0-10) ──
-    tr_score = pd.Series(0.0, index=idx)
-    tr_score[tr.between(2, 5)] = 10
-    tr_score[tr.between(1, 2) | tr.between(5, 8)] = 7
-    tr_score[tr.between(0.5, 1) | tr.between(8, 12)] = 4
-    tr_score[tr.between(0.2, 0.5) | tr.between(12, 20)] = 1
-
-    # ── 6. 盈利能力 (0-10) ──
-    roe = df.get("roe", pd.Series(0, index=idx)).fillna(0)
-    profit_growth = df.get("profit_growth", pd.Series(0, index=idx)).fillna(0)
-    gross_margin = df.get("gross_margin", pd.Series(0, index=idx)).fillna(0)
-
-    # ROE (0-4)
-    roe_score = pd.Series(0.0, index=idx)
-    roe_score[roe > 15] = 4
-    roe_score[roe.between(10, 15)] = 3
-    roe_score[roe.between(5, 10)] = 2
-    roe_score[roe.between(0, 5)] = 1
-
-    # 净利润同比增长 (0-3)
-    growth_score = pd.Series(0.0, index=idx)
-    growth_score[profit_growth > 50] = 3
-    growth_score[profit_growth.between(20, 50)] = 2
-    growth_score[profit_growth.between(0, 20)] = 1
-
-    # 毛利率 (0-3)
-    margin_score = pd.Series(0.0, index=idx)
-    margin_score[gross_margin > 40] = 3
-    margin_score[gross_margin.between(20, 40)] = 2
-    margin_score[gross_margin.between(10, 20)] = 1
-
-    # ── 7. 估值合理 (0-5) ──
-    pe = df.get("pe", pd.Series(0, index=idx)).fillna(0)
-    pe_score = pd.Series(0.0, index=idx)
-    pe_score[(pe > 0) & (pe < 30)] = 5
-    pe_score[(pe >= 30) & (pe < 60)] = 3
-    pe_score[(pe >= 60) & (pe < 100)] = 1
-
-    total = (inflow_score + pct_score + chg_score + intraday_strength +
-             amp_score + eff_score + tr_score + roe_score + growth_score +
-             margin_score + pe_score)
-    return total.round(1)
-
-
 def smart_screen(
     df: pd.DataFrame | None = None,
     *,
@@ -923,7 +816,8 @@ def smart_screen(
     if sort_by and sort_by in sort_cols and sort_by in result.columns:
         result = result.sort_values(sort_by, ascending=ascending)
     elif sort_by == "upside_score" and "upside_score" not in result.columns:
-        result["upside_score"] = _compute_upside_score(result)
+        from .factors import compute_upside_score
+        result["upside_score"] = compute_upside_score(result)
         result = result.sort_values("upside_score", ascending=False)
 
     # 取前N

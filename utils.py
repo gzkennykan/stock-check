@@ -161,3 +161,23 @@ def fmt_wan(val: float, signed: bool = False) -> str:
     if v >= 1e4:
         return f"{prefix}{v / 1e4:.2f}亿"
     return f"{prefix}{v / 1e4:.4f}亿"
+
+
+# ════════════════ 指标卡片 ════════════════
+
+import streamlit as st
+
+
+def display_kpi_row(items: list[tuple[str, str | int | float, str | None]]) -> None:
+    """
+    渲染一行等宽 KPI 指标卡片。
+
+    参数:
+        items: [(label, value, delta), ...] 每项一个三元组，delta 可为 None
+    """
+    if not items:
+        return
+    cols = st.columns(len(items))
+    for i, (label, val, delta) in enumerate(items):
+        with cols[i]:
+            st.metric(label, val, delta=delta)

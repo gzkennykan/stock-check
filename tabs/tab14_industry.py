@@ -1,15 +1,14 @@
-"""Tab 14: 行业轮动 — 行业板块热度排名 & 轮动趋势分析"""
+"""Tab 11: 市场全景 — 行业热度 & 成分股 & 市场宽度"""
 import streamlit as st
 import pandas as pd
 
 from data.industry import (
     fetch_industry_spot, fetch_industry_list,
-    fetch_industry_index, analyze_industry_rotation,
     fetch_industry_stocks,
 )
 
 import plotly.graph_objects as go
-from plotly.subplots import make_subplots
+from visualization.plotly_charts import plot_horizontal_bars
 
 
 @st.cache_data(ttl=300)
@@ -28,103 +27,34 @@ def _load_industry_list():
         return []
 
 
-@st.cache_data(ttl=300)
-def _load_industry_rotation():
-    try:
-        result = analyze_industry_rotation()
-        if result is None:
-            return pd.DataFrame()
-        return result
-    except Exception:
-        return pd.DataFrame()
-
-
 def _plot_industry_heatmap(spot_df: pd.DataFrame) -> go.Figure:
-    """行业涨跌幅热力条"""
+    """行业涨跌幅热力条（使用通用横向柱状图）"""
     if spot_df.empty:
         return go.Figure()
-
-    # 确定列名
-    name_col = None
-    pct_col = None
+    name_col = pct_col = None
     for c in spot_df.columns:
         if "名称" in str(c) or "name" in str(c).lower():
             name_col = c
         if "涨跌幅" in str(c) or "pct" in str(c).lower():
             pct_col = c
-
     if name_col is None or pct_col is None:
         return go.Figure()
-
     df_sorted = spot_df.sort_values(pct_col, ascending=True)
-    pct_vals = pd.to_numeric(df_sorted[pct_col], errors="coerce").values
-    names = df_sorted[name_col].values
-
-    colors = ["#E53935" if v >= 0 else "#1E8E4A" for v in pct_vals]
-
-    fig = go.Figure(data=[go.Bar(
-        x=pct_vals, y=names, orientation="h",
-        marker_color=colors,
-        text=[f"{v:+.2f}%" for v in pct_vals],
-        textposition="outside",
-        hovertemplate="%{y}<br>涨跌幅: %{x:+.2f}%<extra></extra>",
-    )])
-
-    fig.add_vline(x=0, line_dash="dash", line_color="gray", opacity=0.5)
-    fig.update_layout(
-        height=max(400, len(names) * 22),
-        template="plotly_white",
-        margin=dict(l=20, r=50, t=20, b=20),
+    return plot_horizontal_bars(
+        pd.to_numeric(df_sorted[pct_col], errors="coerce").values,
+        df_sorted[name_col].values,
         xaxis_title="涨跌幅 (%)",
+        text_format="{:+0.2f}%",
     )
-    return fig
-
-
-def _plot_industry_trend(industries: list[str], lookback: int = 90) -> go.Figure:
-    """多行业叠加走势对比（同花顺 10jqka 实时数据）"""
-    if not industries:
-        return go.Figure()
-
-    from datetime import datetime
-    end_date = datetime.now().strftime("%Y%m%d")
-
-    fig = go.Figure()
-    colors = ["#1E88E5", "#E53935", "#4CAF50", "#FF9800", "#9C27B0",
-              "#00BCD4", "#FF5722", "#795548", "#607D8B", "#E91E63"]
-
-    for i, ind_name in enumerate(industries[:8]):
-        try:
-            df = fetch_industry_index(ind_name, end_date=end_date)
-            if df.empty or len(df) < 2:
-                continue
-            df_slice = df.tail(lookback) if len(df) > lookback else df
-            close_col = "close" if "close" in df.columns else df.columns[-1]
-            pct = (df_slice[close_col] / df_slice[close_col].iloc[0] - 1) * 100
-            fig.add_trace(go.Scatter(
-                x=pct.index, y=pct.values, mode="lines",
-                name=ind_name, line=dict(color=colors[i % len(colors)], width=1.5),
-                hovertemplate=f"{ind_name}<br>%{{x|%Y-%m-%d}}<br>%{{y:.2f}}%<extra></extra>"
-            ))
-        except Exception:
-            continue
-
-    fig.add_hline(y=0, line_dash="dash", line_color="gray", opacity=0.5)
-    fig.update_layout(
-        height=500, template="plotly_white",
-        hovermode="x unified",
-        margin=dict(l=20, r=20, t=20, b=20),
-        legend=dict(yanchor="top", y=0.99, xanchor="left", x=0.01, font=dict(size=9)),
-        yaxis_title="累计涨跌幅 (%)",
-    )
-    return fig
 
 
 def render():
-    st.title("行业轮动分析")
-    st.caption("行业板块热度排名 & 轮动趋势")
+    st.title("市场全景")
+    st.caption("行业热度 + 成分股 + 市场宽度 — 全方位感知市场温度")
+    st.info("💡 **行业轮动分析**已整合至「📊 高级分析 → 🔄 行业轮动」子页，基于 DuckDB 历史数据提供更全面的多周期动量分析")
 
     tab_i1, tab_i2, tab_i3 = st.tabs([
-        "🔥 行业热度排名", "📈 轮动趋势", "🔬 行业成分股"
+        "🔥 行业热度", "🔬 成分股", "📊 市场宽度"
     ])
 
     # ── Tab 1: 行业热度排名 ──
@@ -175,86 +105,8 @@ def render():
             with st.expander("📋 查看原始数据"):
                 st.dataframe(spot, use_container_width=True, hide_index=True)
 
-    # ── Tab 2: 轮动趋势 ──
+    # ── Tab 2: 行业成分股 ──
     with tab_i2:
-        st.subheader("行业轮动分析")
-        st.caption("基于同花顺行业资金流向实时排名，反映当日资金轮动方向")
-
-        if st.button("🔍 执行轮动分析", key="ind_rotation_btn"):
-            st.cache_data.clear()
-            with st.spinner("获取行业资金流向并进行轮动分析..."):
-                rotation = _load_industry_rotation()
-                if rotation is not None and not isinstance(rotation, bool) and not rotation.empty:
-                    st.session_state["ind_rotation_cache"] = rotation
-            st.rerun()
-
-        if "ind_rotation_cache" in st.session_state:
-            rotation = st.session_state["ind_rotation_cache"]
-            if isinstance(rotation, bool) or rotation.empty:
-                pass
-            else:
-                top5 = rotation.head(5)
-                bottom5 = rotation.tail(5)
-
-                col_a, col_b = st.columns(2)
-                with col_a:
-                    st.markdown("##### 🔥 资金净流入 TOP5")
-                    for _, r in top5.iterrows():
-                        st.metric(r["行业"], f"{r['净额(亿)']:+,.2f} 亿")
-                with col_b:
-                    st.markdown("##### ❄️ 资金净流出 BOTTOM5")
-                    for _, r in bottom5.iterrows():
-                        st.metric(r["行业"], f"{r['净额(亿)']:+,.2f} 亿")
-
-                # 资金流向柱状图
-                plot_df = rotation.head(30).copy()
-                plot_df = plot_df.sort_values("净额(亿)", ascending=True)
-                colors = ["#E53935" if v >= 0 else "#1E8E4A" for v in plot_df["净额(亿)"]]
-                fig_flow = go.Figure(data=[go.Bar(
-                    x=plot_df["净额(亿)"].values,
-                    y=plot_df["行业"].values, orientation="h",
-                    marker_color=colors,
-                    text=[f"{v:+,.2f}亿" for v in plot_df["净额(亿)"].values],
-                    textposition="outside",
-                    hovertemplate="%{y}<br>净额: %{x:+,.2f}亿<extra></extra>",
-                )])
-                fig_flow.add_vline(x=0, line_dash="dash", line_color="gray", opacity=0.5)
-                fig_flow.update_layout(
-                    height=max(500, len(plot_df) * 20),
-                    template="plotly_white",
-                    margin=dict(l=20, r=60, t=20, b=20),
-                    xaxis_title="资金净额（亿元）",
-                )
-                st.plotly_chart(fig_flow, use_container_width=True, key="ind_fund_flow")
-
-                st.dataframe(rotation, use_container_width=True, hide_index=True,
-                             column_config={
-                                 "涨跌幅(%)": st.column_config.NumberColumn(format="%+.2f"),
-                                 "净额(亿)": st.column_config.NumberColumn(format="%+.2f"),
-                                 "流入资金(亿)": st.column_config.NumberColumn(format="%.2f"),
-                                 "流出资金(亿)": st.column_config.NumberColumn(format="%.2f"),
-                                 "领涨股涨幅(%)": st.column_config.NumberColumn(format="%+.2f"),
-                             })
-
-        # 自定义行业对比
-        st.subheader("自定义行业走势对比")
-        st.caption("同花顺行业指数历史走势（实时数据）")
-        industry_list = _load_industry_list()
-        if industry_list:
-            selected_inds = st.multiselect(
-                "选择行业进行走势对比（最多8个）",
-                options=industry_list,
-                default=[],
-                max_selections=8,
-                placeholder="如：半导体及元件、银行、白酒...",
-                key="ind_compare",
-            )
-            if selected_inds:
-                fig_trend = _plot_industry_trend(selected_inds, 365)
-                st.plotly_chart(fig_trend, use_container_width=True, key="ind_trend")
-
-    # ── Tab 3: 行业成分股 ──
-    with tab_i3:
         st.subheader("行业成分股查询")
 
         industry_list = _load_industry_list()
@@ -279,3 +131,216 @@ def render():
                     st.caption(f"「{st.session_state.get('ind_stocks_name', '')}」成分股 — "
                                f"共 {len(stocks_data)} 只")
                     st.dataframe(stocks_data, use_container_width=True, hide_index=True)
+
+    # ══════════════════════════════════════════
+    # Tab 3: 市场宽度 ✨
+    # ══════════════════════════════════════════
+    with tab_i3:
+        st.subheader("市场宽度仪表盘")
+        st.caption("基于全市场 ~5200 只股票的实时统计，感知整体市场温度（数据源: 新浪行情 + 同花顺资金流）")
+
+        if st.button("🔄 刷新市场宽度", use_container_width=True, key="breadth_refresh"):
+            st.cache_data.clear()
+
+        with st.spinner("正在计算市场宽度指标..."):
+            try:
+                from data.screener import get_stock_list, get_fund_flow_data
+                spot_df = get_stock_list()
+                try:
+                    fund_df = get_fund_flow_data()
+                except Exception:
+                    fund_df = pd.DataFrame()
+            except Exception as e:
+                st.error(f"数据加载失败: {e}")
+                spot_df, fund_df = pd.DataFrame(), pd.DataFrame()
+
+        if spot_df.empty:
+            st.info("暂无行情数据")
+        else:
+            # ── 基础统计 ──
+            total_stocks = len(spot_df)
+            pct_col = "pct_change" if "pct_change" in spot_df.columns else None
+
+            if pct_col and pct_col in spot_df.columns:
+                pct_vals = pd.to_numeric(spot_df[pct_col], errors="coerce").dropna()
+                up_count = (pct_vals > 0).sum()
+                down_count = (pct_vals < 0).sum()
+                flat_count = (pct_vals == 0).sum()
+                up_ratio = up_count / len(pct_vals) * 100 if len(pct_vals) > 0 else 0
+
+                # 涨停/跌停近似 (A股 ±10% 涨跌停，创业板/科创板 ±20%)
+                zt_approx = (pct_vals >= 9.5).sum()
+                dt_approx = (pct_vals <= -9.5).sum()
+
+                # 强/弱势股比例 (>5% / <-5%)
+                strong_up = (pct_vals >= 5).sum()
+                strong_down = (pct_vals <= -5).sum()
+
+                avg_pct = pct_vals.mean()
+                median_pct = pct_vals.median()
+
+            # ── 概览卡片 ──
+            st.caption("### 涨跌宽度")
+            c1, c2, c3, c4, c5 = st.columns(5)
+            if pct_col and pct_col in spot_df.columns:
+                with c1:
+                    st.metric("上涨家数", up_count, delta=f"{up_ratio:.0f}%")
+                with c2:
+                    st.metric("下跌家数", down_count)
+                with c3:
+                    st.metric("平盘", flat_count)
+                with c4:
+                    st.metric("涨停≈", zt_approx, help="涨跌幅≥9.5%的股票数")
+                with c5:
+                    st.metric("跌停≈", dt_approx, help="涨跌幅≤-9.5%的股票数")
+
+                c6, c7, c8, c9, c10 = st.columns(5)
+                with c6:
+                    st.metric("平均涨幅", f"{avg_pct:+.2f}%")
+                with c7:
+                    st.metric("涨幅中位数", f"{median_pct:+.2f}%")
+                with c8:
+                    st.metric("强势股(≥5%)", strong_up)
+                with c9:
+                    st.metric("弱势股(≤-5%)", strong_down)
+                with c10:
+                    ratio = f"{up_count/down_count:.2f}" if down_count > 0 else "∞"
+                    st.metric("涨跌比", ratio, help="上涨/下跌家数比，>2=强势市场，<0.5=弱势市场")
+
+            # ── 资金宽度 ──
+            if not fund_df.empty and "main_capital" in fund_df.columns:
+                st.divider()
+                st.caption("### 资金宽度")
+                fund_cap = pd.to_numeric(fund_df["main_capital"], errors="coerce").dropna()
+                fund_positive = (fund_cap > 0).sum()
+                fund_total = len(fund_cap)
+                fund_breadth = fund_positive / fund_total * 100 if fund_total > 0 else 0
+
+                total_main = fund_cap.sum()
+                total_main_inflow = fund_cap[fund_cap > 0].sum()
+                total_main_outflow = abs(fund_cap[fund_cap < 0].sum())
+
+                cc1, cc2, cc3, cc4 = st.columns(4)
+                with cc1:
+                    st.metric("主力净流入家数", fund_positive, delta=f"{fund_breadth:.0f}%")
+                with cc2:
+                    st.metric("资金宽度", f"{fund_breadth:.0f}%",
+                              help="主力净流入为正的股票占比。>50%=资金面偏暖，<30%=资金面偏冷")
+                with cc3:
+                    from utils import fmt_yuan
+                    st.metric("全市场主力净流入", fmt_yuan(total_main_inflow, signed=False),
+                              help="所有主力净流入股票的资金总和")
+                with cc4:
+                    st.metric("全市场主力净流出", fmt_yuan(total_main_outflow, signed=False),
+                              help="所有主力净流出股票的资金总和(绝对值)")
+
+                # 资金宽度进度条
+                width_color = "#4CAF50" if fund_breadth >= 50 else ("#FF9800" if fund_breadth >= 30 else "#E53935")
+                st.progress(min(fund_breadth / 100, 1.0),
+                            text=f"资金宽度: {fund_breadth:.0f}% (净流入为正的股票占比)")
+
+            # ── 成交额集中度 ──
+            if "turnover" in spot_df.columns:
+                st.divider()
+                st.caption("### 成交额集中度")
+                turnover_vals = pd.to_numeric(spot_df["turnover"], errors="coerce").dropna().sort_values(ascending=False)
+                total_turnover = turnover_vals.sum()
+
+                if total_turnover > 0:
+                    top10_pct = turnover_vals.head(10).sum() / total_turnover * 100
+                    top50_pct = turnover_vals.head(50).sum() / total_turnover * 100
+                    top100_pct = turnover_vals.head(100).sum() / total_turnover * 100
+
+                    tc1, tc2, tc3 = st.columns(3)
+                    with tc1:
+                        st.metric("TOP10 成交占比", f"{top10_pct:.1f}%",
+                                  help="成交额最大的10只股票占总成交的比例，越高=资金越集中")
+                    with tc2:
+                        st.metric("TOP50 成交占比", f"{top50_pct:.1f}%")
+                    with tc3:
+                        st.metric("TOP100 成交占比", f"{top100_pct:.1f}%")
+
+            # ── 涨跌分布直方图 ──
+            if pct_col and pct_col in spot_df.columns:
+                st.divider()
+                st.caption("### 涨跌幅分布")
+
+                # 分段统计
+                bins = [-100, -10, -8, -5, -3, -1, 0, 1, 3, 5, 8, 10, 100]
+                labels = ["跌停", "-10~-8%", "-8~-5%", "-5~-3%", "-3~-1%", "-1~0%",
+                          "0~1%", "1~3%", "3~5%", "5~8%", "8~10%", "涨停"]
+                pct_binned = pd.cut(pct_vals, bins=bins, labels=labels, right=True)
+                dist = pct_binned.value_counts().reindex(labels, fill_value=0)
+
+                colors_bar = ["#B71C1C"] + ["#E57373"] * 4 + ["#BDBDBD"] + \
+                             ["#81C784"] * 4 + ["#2E7D32"]
+
+                fig_dist = go.Figure(data=[go.Bar(
+                    x=labels, y=dist.values,
+                    marker_color=colors_bar,
+                    text=[f"{v}只" if v > 0 else "" for v in dist.values],
+                    textposition="outside",
+                )])
+                fig_dist.update_layout(
+                    height=350, template="plotly_white",
+                    margin=dict(l=20, r=20, t=20, b=60),
+                    xaxis_tickangle=-45,
+                    yaxis_title="股票数量",
+                )
+                st.plotly_chart(fig_dist, use_container_width=True)
+
+            # ── 市场温度总结 ──
+            st.divider()
+            st.caption("### 市场温度评估")
+
+            # 综合评估
+            temp_score = 0
+            temp_reasons = []
+
+            if pct_col and pct_col in spot_df.columns:
+                if up_ratio > 65:
+                    temp_score += 30
+                    temp_reasons.append(f"✅ 上涨占比{up_ratio:.0f}%，市场普涨")
+                elif up_ratio > 45:
+                    temp_score += 20
+                    temp_reasons.append(f"↔️ 上涨占比{up_ratio:.0f}%，多空均衡")
+                else:
+                    temp_score += 5
+                    temp_reasons.append(f"⚠️ 上涨仅{up_ratio:.0f}%，空头主导")
+
+                if zt_approx > 50:
+                    temp_score += 25
+                    temp_reasons.append(f"🔥 涨停≈{zt_approx}只，投机情绪高涨")
+                elif zt_approx > 20:
+                    temp_score += 15
+                    temp_reasons.append(f"✅ 涨停≈{zt_approx}只，正常偏强")
+                else:
+                    temp_score += 5
+                    temp_reasons.append(f"❄️ 涨停≈{zt_approx}只，投机情绪低迷")
+
+            if not fund_df.empty and "main_capital" in fund_df.columns:
+                if fund_breadth > 55:
+                    temp_score += 25
+                    temp_reasons.append(f"💰 资金宽度{fund_breadth:.0f}%，资金面充裕")
+                elif fund_breadth > 35:
+                    temp_score += 15
+                    temp_reasons.append(f"↔️ 资金宽度{fund_breadth:.0f}%，资金面一般")
+                else:
+                    temp_score += 5
+                    temp_reasons.append(f"💸 资金宽度{fund_breadth:.0f}%，资金面紧张")
+
+            temp_label = "🔥 高温" if temp_score >= 60 else ("🌤️ 温和" if temp_score >= 35 else "❄️ 低温")
+            temp_color = "#E53935" if temp_score >= 60 else ("#FF9800" if temp_score >= 35 else "#4CAF50")
+
+            col_temp1, col_temp2 = st.columns([1, 3])
+            with col_temp1:
+                st.markdown(f"<h1 style='text-align:center;color:{temp_color}'>{temp_label}</h1>",
+                           unsafe_allow_html=True)
+                st.caption(f"评分: {temp_score}/80")
+            with col_temp2:
+                for reason in temp_reasons:
+                    st.write(reason)
+
+            st.caption("💡 **市场宽度**通过全市场涨跌比例、资金流向分布、成交额集中度等指标综合判断市场温度。"
+                      "宽度>65%上涨为普涨格局（适合追涨），<35%为普跌（适合防守）。"
+                      "涨停数反映游资活跃度，资金宽度反映主力意愿。")

@@ -2,7 +2,8 @@
 import streamlit as st
 import pandas as pd
 from datetime import datetime
-from data.screener import get_combined_data, _compute_upside_score
+from data.screener import get_combined_data
+from data.factors import compute_upside_score
 from utils import fmt_yuan
 
 
@@ -37,7 +38,7 @@ def render():
     if "name" in v_data.columns:
         v_data = v_data[~v_data["name"].astype(str).str.contains("ST|退")]
 
-    v_data["upside_score"] = _compute_upside_score(v_data)
+    v_data["upside_score"] = compute_upside_score(v_data)
     v_data = v_data.sort_values("upside_score", ascending=False)
 
     # 搜索过滤
@@ -95,7 +96,8 @@ def render():
         },
     )
 
-    st.caption("💡 值博率评分：资金流入(27%) + 净流入占比(17%) + 涨幅合理性(16%) + 技术面(15%) + 换手活跃度(10%) + 盈利能力(10%) + 估值合理(5%)")
+    st.caption("💡 值博率评分：资金流入(27%) + 净流入占比(17%) + 涨幅合理性(16%) + "
+              "技术面(15%：强势度+振幅+量价配合+主力背离) + 换手(10%) + 盈利能力(10%) + 估值(5%)")
 
     # CSV 导出
     csv_data = v_data.to_csv(index=False).encode("utf-8-sig")

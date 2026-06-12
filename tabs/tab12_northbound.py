@@ -62,11 +62,11 @@ def _plot_northbound_flow(df: pd.DataFrame) -> go.Figure:
 
 
 def render():
-    st.title("北向资金分析")
-    st.caption("沪股通 / 深股通资金流向 — 外资动向风向标（数据源: 东方财富）")
+    st.title("资金面分析")
+    st.caption("北向资金 + 融资融券 — 内外资动向全景（数据源: 东方财富 / 沪深交易所）")
 
-    tab_nb1, tab_nb2, tab_nb3 = st.tabs([
-        "📈 资金流向趋势", "📋 市场汇总", "🔍 个股北上持仓"
+    tab_nb1, tab_nb2, tab_nb3, tab_nb4 = st.tabs([
+        "📈 北向趋势", "📋 市场汇总", "🔍 个股持仓", "📊 融资融券"
     ])
 
     # ── Tab 1: 资金流向趋势 ──
@@ -245,3 +245,133 @@ def render():
                         display_df[["持股市值(亿)", "持股数(万股)", "占总股本比(%)", "占流通股比(%)", "机构数", "收盘价"]],
                         use_container_width=True
                     )
+
+    # ══════════════════════════════════════════
+    # Tab 4: 融资融券 ✨
+    # ══════════════════════════════════════════
+    with tab_nb4:
+        st.subheader("融资融券分析")
+        st.caption("沪深两市融资融券余额趋势 — 市场杠杆情绪温度计（数据源: 沪深交易所）")
+
+        col_m1, col_m2 = st.columns([2, 3])
+        with col_m1:
+            margin_days = st.selectbox("查看天数", [30, 60, 90, 120], index=1, key="margin_days")
+        with col_m2:
+            refresh_margin = st.button("🔄 刷新两融数据", use_container_width=True, key="refresh_margin")
+
+        with st.spinner("正在获取融资融券数据..."):
+            try:
+                from data.margin import get_margin_summary, get_margin_trend
+                margin_summary = get_margin_summary(force_refresh=refresh_margin)
+                margin_trend = get_margin_trend(days=int(margin_days), force_refresh=refresh_margin)
+            except Exception as e:
+                st.error(f"获取两融数据失败: {e}")
+                margin_summary, margin_trend = {}, pd.DataFrame()
+
+        # ── 概览卡片 ──
+        if margin_summary:
+            c1, c2, c3, c4 = st.columns(4)
+            with c1:
+                mb = margin_summary.get("margin_balance", 0)
+                mb_chg = margin_summary.get("margin_balance_change", 0)
+                st.metric(
+                    "融资余额", f"{mb:,.0f} 亿",
+                    delta=f"{mb_chg:+,.0f} 亿" if mb_chg else None,
+                    help="沪深两市融资总余额"
+                )
+            with c2:
+                mbuy = margin_summary.get("margin_buy", 0)
+                st.metric("当日融资买入", f"{mbuy:,.0f} 亿", help="当日融资买入额")
+            with c3:
+                net = margin_summary.get("net_margin_buy", 0)
+                net_chg = margin_summary.get("net_buy_change", 0)
+                st.metric(
+                    "融资净买入", f"{net:+,.0f} 亿",
+                    delta=f"{net_chg:+,.0f} 亿" if net_chg else None,
+                    help="融资买入 - 融资偿还"
+                )
+            with c4:
+                sb = margin_summary.get("short_balance", 0)
+                sb_chg = margin_summary.get("short_balance_change", 0)
+                st.metric(
+                    "融券余额", f"{sb:,.0f} 亿",
+                    delta=f"{sb_chg:+,.0f} 亿" if sb_chg else None,
+                    help="融券做空余额"
+                )
+
+            st.caption(f"数据截止: {margin_summary.get('date', 'N/A')}  |  "
+                      f"20日均融资余额: {margin_summary.get('margin_balance_ma20', 0):,.0f} 亿")
+
+        # ── 趋势图 ──
+        if not margin_trend.empty:
+            import plotly.graph_objects as go
+            from plotly.subplots import make_subplots
+
+            fig = make_subplots(
+                rows=2, cols=1, shared_xaxes=True,
+                vertical_spacing=0.06, row_heights=[0.5, 0.5],
+                subplot_titles=("融资余额趋势（亿元）", "融资净买入 / 融资买入（亿元）")
+            )
+
+            # 融资余额趋势
+            if "margin_balance_yi" in margin_trend.columns:
+                bal = margin_trend["margin_balance_yi"]
+                ma20 = bal.rolling(20, min_periods=5).mean()
+                fig.add_trace(go.Scatter(
+                    x=margin_trend.index, y=bal.values,
+                    mode="lines", name="融资余额",
+                    line=dict(color="#1E88E5", width=1.5),
+                ), row=1, col=1)
+                fig.add_trace(go.Scatter(
+                    x=margin_trend.index, y=ma20.values,
+                    mode="lines", name="20日均值",
+                    line=dict(color="#FF9800", width=1.5, dash="dash"),
+                ), row=1, col=1)
+
+            # 融资买入 & 净买入
+            if "margin_buy_yi" in margin_trend.columns:
+                fig.add_trace(go.Bar(
+                    x=margin_trend.index, y=margin_trend["margin_buy_yi"].values,
+                    name="融资买入", marker_color="#4CAF50", opacity=0.6,
+                ), row=2, col=1)
+            if "net_margin_buy_yi" in margin_trend.columns:
+                colors = ["#E53935" if v < 0 else "#4CAF50" for v in margin_trend["net_margin_buy_yi"].values]
+                fig.add_trace(go.Bar(
+                    x=margin_trend.index, y=margin_trend["net_margin_buy_yi"].values,
+                    name="融资净买入", marker_color=colors,
+                ), row=2, col=1)
+
+            fig.update_layout(
+                height=500, showlegend=True,
+                template="plotly_white", hovermode="x unified",
+                margin=dict(l=20, r=20, t=40, b=20),
+                legend=dict(orientation="h", yanchor="bottom", y=1.02),
+            )
+            fig.update_xaxes(rangeslider_visible=False)
+            st.plotly_chart(fig, use_container_width=True)
+
+            # ── 融券余额趋势 ──
+            if "short_balance_yi" in margin_trend.columns:
+                st.divider()
+                st.caption("融券余额趋势（做空力量）")
+                fig2 = go.Figure()
+                short_bal = margin_trend["short_balance_yi"]
+                fig2.add_trace(go.Scatter(
+                    x=margin_trend.index, y=short_bal.values,
+                    mode="lines", name="融券余额(亿)",
+                    fill="tozeroy", fillcolor="rgba(229,57,53,0.08)",
+                    line=dict(color="#E53935", width=2),
+                ))
+                fig2.update_layout(
+                    height=250, showlegend=False,
+                    template="plotly_white",
+                    margin=dict(l=20, r=20, t=20, b=20),
+                )
+                st.plotly_chart(fig2, use_container_width=True)
+        else:
+            st.info("暂无两融数据（联网获取中...）")
+
+        st.divider()
+        st.caption("💡 融资余额上升 → 市场加杠杆做多情绪强；融资余额持续下降 → 去杠杆避险。"
+                  "融券余额飙升 → 做空力量积聚，需警惕。"
+                  "融资净买入转正且连续放大 → 多头加速入场信号。")

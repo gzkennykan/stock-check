@@ -190,3 +190,41 @@ def plot_optimization_history(trials_df: pd.DataFrame, param_names: list[str]) -
     fig.update_layout(height=300, showlegend=False, template="plotly_white",
                       margin=dict(l=20, r=20, t=40, b=20))
     return fig
+
+
+def plot_horizontal_bars(
+    values, labels, *,
+    colors=None, xaxis_title: str = "", height: int | None = None,
+    zero_line: bool = True, text_format: str = "{:.1f}",
+) -> go.Figure:
+    """
+    通用横向柱状图：红涨绿跌配色，带数值标签和可选零轴虚线。
+
+    参数:
+        values: 数值列表
+        labels: 标签列表（Y轴）
+        colors: 按项指定颜色列表，默认正红负绿
+        xaxis_title: X轴标题
+        height: 图表高度，默认按项数自动
+        zero_line: 是否画零轴虚线
+        text_format: 标签文本格式
+    """
+    if colors is None:
+        colors = ["#E53935" if v >= 0 else "#1E8E4A" for v in values]
+    fig = go.Figure(data=[go.Bar(
+        x=list(values), y=list(labels), orientation="h",
+        marker_color=colors,
+        text=[text_format.format(v) for v in values],
+        textposition="outside",
+        hovertemplate="%{y}<br>%{x}<extra></extra>",
+    )])
+    if zero_line:
+        fig.add_vline(x=0, line_dash="dash", line_color="gray", opacity=0.5)
+    if height is None:
+        height = max(300, len(labels) * 24)
+    fig.update_layout(
+        height=height, template="plotly_white",
+        margin=dict(l=20, r=60, t=10, b=10),
+        xaxis_title=xaxis_title,
+    )
+    return fig

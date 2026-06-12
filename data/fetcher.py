@@ -1,9 +1,13 @@
 """
 数据获取统一接口：AKShare (A股) 和 yfinance (美股/港股)
 仅使用真实数据源，不生成模拟数据
+
+缓存优先级: DuckDB 数据库 > CSV 文件 > 网络请求
+获取数据后同时写入 DuckDB 和 CSV（双写）
 """
 import pandas as pd
 from .store import load_from_csv, save_to_csv
+from .database import get_kline, insert_kline
 
 
 def _symbol_to_sina(symbol: str) -> str:
@@ -85,7 +89,8 @@ def _detect_source(symbol: str) -> str:
 def fetch_data(symbol: str, start: str, end: str, source: str | None = None,
                use_cache: bool = True) -> pd.DataFrame:
     """
-    获取股票历史日线数据。先查缓存，未命中则从网络获取并缓存。
+    获取股票历史日线数据。缓存优先级: DuckDB > CSV > 网络。
+    从网络获取后会同时写入 DuckDB 和 CSV（双写）。
 
     参数:
         symbol: 股票代码 (A股如 "600036", 美股如 "AAPL")
@@ -98,13 +103,30 @@ def fetch_data(symbol: str, start: str, end: str, source: str | None = None,
         source = _detect_source(symbol)
 
     if use_cache:
+        # 1) 优先从 DuckDB 读取
+        db_data = get_kline(symbol, start, end)
+        if not db_data.empty:
+            return db_data
+
+        # 2) 回退到 CSV
         cached = load_from_csv(symbol)
         if cached is not None:
+            # 把 CSV 数据回写到 DB，方便后续查询
+            try:
+                insert_kline(symbol, cached, source=source)
+            except Exception:
+                pass  # DB 写入失败不影响主流程
             return cached.loc[start:end]
 
+    # 3) 从网络获取
     fetcher = _fetch_akshare if source == "akshare" else _fetch_yfinance
     df = fetcher(symbol, start, end)
 
     if use_cache:
+        # 双写: CSV + DuckDB
         save_to_csv(symbol, df)
+        try:
+            insert_kline(symbol, df, source=source)
+        except Exception:
+            pass  # DB 写入失败不影响主流程
     return df

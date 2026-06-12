@@ -153,26 +153,27 @@ else:
 
 # =========================== 主区域 Tab 路由 ===========================
 
-tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10, tab11, tab12, tab13, tab14 = st.tabs([
-    "📊 单策略回测", "📋 策略对比", "🔧 参数优化", "🔍 选股池",
-    "💰 资金流入TOP50", "💸 资金流出TOP50", "📈 成交额TOP50",
-    "🧠 智能选股", "🐉 龙虎榜", "🔥 值博率", "🧺 组合回测", "🌏 北向资金", "📊 财务分析", "🏭 行业轮动",
+tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10, tab11, tab12, tab13 = st.tabs([
+    "📊 单策略回测", "📋 策略对比", "🔧 参数优化",
+    "💰 资金排名",
+    "🧠 智能选股", "🐉 强势股", "🔥 值博率",
+    "🧺 组合回测", "🌏 北向&融资", "📊 财务分析", "🏭 市场全景",
+    "🗄️ 数据中心", "📊 高级分析",
 ])
 
 from tabs.tab1_backtest import render as render_tab1
 from tabs.tab2_compare import render as render_tab2
 from tabs.tab3_optimize import render as render_tab3
-from tabs.tab4_screener import render as render_tab4
-from tabs.tab5_inflow import render as render_tab5
-from tabs.tab6_outflow import render as render_tab6
-from tabs.tab7_turnover import render as render_tab7
-from tabs.tab8_smart import render as render_tab8
-from tabs.tab9_lhb import render as render_tab9
-from tabs.tab10_upside import render as render_tab10
-from tabs.tab11_portfolio import render as render_tab11
-from tabs.tab12_northbound import render as render_tab12
-from tabs.tab13_fundamental import render as render_tab13
-from tabs.tab14_industry import render as render_tab14
+from tabs.tab5_market_rank import render as render_tab4
+from tabs.tab8_smart import render as render_tab5
+from tabs.tab9_lhb import render as render_tab6
+from tabs.tab10_upside import render as render_tab7
+from tabs.tab11_portfolio import render as render_tab8
+from tabs.tab12_northbound import render as render_tab9
+from tabs.tab13_fundamental import render as render_tab10
+from tabs.tab14_industry import render as render_tab11
+from tabs.tab15_database import render as render_tab12
+from tabs.tab16_advanced import render as render_tab13
 
 with tab1:
     render_tab1()
@@ -212,6 +213,3 @@ with tab12:
 
 with tab13:
     render_tab13()
-
-with tab14:
-    render_tab14()
