@@ -46,18 +46,18 @@ def _fetch_zt_pool(date: str) -> pd.DataFrame:
     col_map = {
         "涨跌幅": "pct_change",
         "最新价": "price",
-        "涨停价": "limit_price",
-        "封单资金": "seal_fund",
+        "封板资金": "seal_fund",       # AKShare 实际返回的列名
+        "封单资金": "seal_fund",       # 兼容旧版本 AKShare
         "封单金额": "seal_fund",
-        "封单数量": "seal_vol",
         "换手率": "turnover_rate",
         "流通市值": "float_mktcap",
-        "涨停时间": "zt_time",
+        "最后封板时间": "zt_time",
+        "首次封板时间": "first_zt_time",
+        "涨停时间": "zt_time",         # 兼容旧版本
+        "首次涨停时间": "first_zt_time",
         "炸板次数": "break_count",
         "所属行业": "industry",
         "成交额": "turnover",
-        "成交量": "volume",
-        "首次涨停时间": "first_zt_time",
     }
 
     for cn_name, en_name in col_map.items():
@@ -128,8 +128,9 @@ def _fetch_zt_strong() -> pd.DataFrame:
         ("涨跌幅", "pct_change"), ("最新价", "price"),
         ("涨停价", "limit_price"), ("换手率", "turnover_rate"),
         ("流通市值", "float_mktcap"), ("所属行业", "industry"),
-        ("连续涨停天数", "consecutive_days"),
-        ("封单资金", "seal_fund"),
+        ("涨停统计", "board_stat"),     # 如 "2/2" 表示2天2板
+        ("封板资金", "seal_fund"),
+        ("封单资金", "seal_fund"),      # 兼容
     ]:
         if cn_name in raw.columns:
             df[en_name] = raw[cn_name]
@@ -137,8 +138,14 @@ def _fetch_zt_strong() -> pd.DataFrame:
     for col in ["pct_change", "price", "turnover_rate"]:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce")
-    if "consecutive_days" in df.columns:
-        df["consecutive_days"] = pd.to_numeric(df["consecutive_days"], errors="coerce").fillna(1).astype(int)
+
+    # 从 "涨停统计" 列解析连板天数，如 "2/2" → 2
+    if "board_stat" in df.columns:
+        df["consecutive_days"] = df["board_stat"].astype(str).str.extract(
+            r'(\d+)').iloc[:, 0]
+        df["consecutive_days"] = pd.to_numeric(
+            df["consecutive_days"], errors="coerce").fillna(1).astype(int)
+
     if "seal_fund" in df.columns:
         df["seal_fund_val"] = _parse_seal_fund(df["seal_fund"].astype(str))
 

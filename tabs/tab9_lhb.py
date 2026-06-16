@@ -6,6 +6,18 @@ from data.lhb import get_lhb_daily, get_lhb_seat_detail
 from utils import fmt_wan, latest_trading_day, is_weekend
 
 
+def _fmt_zt_time(val):
+    """格式化涨停时间: '092500' → '09:25:00' / '09:25' """
+    if pd.isna(val):
+        return "-"
+    s = str(val).strip()
+    if len(s) >= 6:
+        return f"{s[:2]}:{s[2:4]}:{s[4:6]}"
+    if len(s) >= 4:
+        return f"{s[:2]}:{s[2:4]}"
+    return s
+
+
 def render():
     st.title("🐉 强势股")
     st.caption("龙虎榜 + 涨停板 — 追踪市场最强标的（数据源: 新浪财经 / 东方财富）")
@@ -231,15 +243,18 @@ def render():
                 elif "seal_fund" in show.columns:
                     show["封单"] = show["seal_fund"].astype(str)
 
-                if "zt_time" in show.columns:
-                    show["涨停时间"] = show["zt_time"].astype(str)
+                if "first_zt_time" in show.columns:
+                    # 格式化时间: "092500" → "09:25"
+                    show["封板时间"] = show["first_zt_time"].apply(_fmt_zt_time)
+                elif "zt_time" in show.columns:
+                    show["封板时间"] = show["zt_time"].apply(_fmt_zt_time)
                 if "break_count" in show.columns:
                     show["炸板次数"] = show["break_count"]
                 if "industry" in show.columns:
                     show["行业"] = show["industry"]
 
                 display_cols = ["code", "name", "price", "pct_change", "turnover_rate"]
-                extra = [c for c in ["封单(万)", "封单", "涨停时间", "炸板次数", "行业"] if c in show.columns]
+                extra = [c for c in ["封单(万)", "封单", "封板时间", "炸板次数", "行业"] if c in show.columns]
                 display_cols.extend(extra)
                 display_cols = [c for c in display_cols if c in show.columns]
 
