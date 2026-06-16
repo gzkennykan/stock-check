@@ -26,3 +26,28 @@ DEFAULT_SOURCE = "akshare"      # akshare / yfinance
 # 回测默认时间范围
 DEFAULT_START = "2023-01-01"
 DEFAULT_END = "2024-12-31"
+
+# ────────────────────────── 通达信 (TDX) 本地数据 ──────────────────────────
+
+# 通达信 vipdoc 候选路径（按顺序自动探测）
+TDX_VIPDOC_CANDIDATES = [
+    "C:/zd_zxzq_gm/vipdoc",
+    "C:/中信证券至信版/vipdoc",
+    "C:/new_zxzq/vipdoc",
+]
+
+# 手动指定的 vipdoc 路径（None=自动探测）
+TDX_VIPDOC_PATH = None
+
+
+def get_tdx_vipdoc_path() -> Path | None:
+    """返回通达信 vipdoc 目录路径（手动配置优先，否则自动探测）"""
+    if TDX_VIPDOC_PATH:
+        p = Path(TDX_VIPDOC_PATH)
+        if p.exists():
+            return p
+    for candidate in TDX_VIPDOC_CANDIDATES:
+        p = Path(candidate)
+        if p.exists():
+            return p
+    return None

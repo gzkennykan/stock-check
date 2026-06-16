@@ -164,16 +164,11 @@ def sync_from_tdx(vipdoc_path: str = None, symbols: list[str] = None,
     from .tdx_reader import import_vipdoc_to_db_direct, import_vipdoc_to_db_incremental
 
     if vipdoc_path is None:
-        candidates = [
-            "C:/zd_zxzq_gm/vipdoc",
-            "C:/中信证券至信版/vipdoc",
-            "C:/new_zxzq/vipdoc",
-        ]
-        for c in candidates:
-            if Path(c).exists():
-                vipdoc_path = c
-                break
-        if vipdoc_path is None:
+        from config import get_tdx_vipdoc_path
+        detected = get_tdx_vipdoc_path()
+        if detected:
+            vipdoc_path = str(detected)
+        else:
             return {"imported": 0, "stocks": [], "errors": ["未找到券商客户端目录"]}
 
     if full_import:

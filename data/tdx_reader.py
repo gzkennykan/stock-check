@@ -327,16 +327,11 @@ def _main():
 
     # 默认路径
     if args.vipdoc is None:
-        candidates = [
-            Path("C:/zd_zxzq_gm/vipdoc"),
-            Path("C:/中信证券至信版/vipdoc"),
-            Path("C:/new_zxzq/vipdoc"),
-        ]
-        for c in candidates:
-            if c.exists():
-                args.vipdoc = c
-                break
-        if args.vipdoc is None:
+        from config import get_tdx_vipdoc_path
+        detected = get_tdx_vipdoc_path()
+        if detected:
+            args.vipdoc = detected
+        else:
             print("未找到通达信 vipdoc 目录，请手动指定路径")
             return
 

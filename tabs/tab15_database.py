@@ -207,13 +207,14 @@ def _render_tdx_import():
     """渲染通达信 .day → DB 导入面板"""
     st.subheader("📡 从券商客户端导入 (通达信 .day)")
 
-    # 自动扫描常见路径
-    candidates = [
-        "C:/zd_zxzq_gm/vipdoc",
-        "C:/new_zxzq/vipdoc",
-        "C:/中信证券至信版/vipdoc",
-    ]
-    found_paths = [p for p in candidates if Path(p).exists()]
+    # 自动扫描常见路径（从 config 统一读取）
+    from config import TDX_VIPDOC_CANDIDATES, get_tdx_vipdoc_path
+    found_paths = [p for p in TDX_VIPDOC_CANDIDATES if Path(p).exists()]
+
+    # 如果手动配置了路径，也加入
+    detected = get_tdx_vipdoc_path()
+    if detected and str(detected) not in found_paths:
+        found_paths.insert(0, str(detected))
 
     col_path, col_scan = st.columns([3, 1])
     with col_path:
@@ -504,7 +505,10 @@ def _render_sync():
         st.markdown("**方式二：券商客户端本地同步（秒级）**")
         st.caption("从通达信 vipdoc 目录导入。需先在券商客户端浏览过K线图以触发自动下载。")
     with col_d:
-        tdx_path = st.text_input("vipdoc 路径", value="C:/zd_zxzq_gm/vipdoc",
+        from config import get_tdx_vipdoc_path
+        detected_path = get_tdx_vipdoc_path()
+        default_tdx = str(detected_path) if detected_path else "C:/zd_zxzq_gm/vipdoc"
+        tdx_path = st.text_input("vipdoc 路径", value=default_tdx,
                                   key="sync_tdx_path", label_visibility="collapsed")
     if st.button("📡 从券商客户端同步", use_container_width=True, key="sync_tdx_btn"):
         with st.spinner("正在从券商客户端导入..."):

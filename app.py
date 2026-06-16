@@ -16,6 +16,69 @@ from strategies import DonchianStrategy, ATRStrategy
 
 st.set_page_config(page_title="WinnerK股票量化系统", page_icon="📈", layout="wide")
 
+
+def _startup_tdx_sync():
+    """
+    启动时自动从通达信本地 .day 文件增量同步到 DuckDB。
+    每个浏览器会话仅执行一次，增量模式（每只股票只读末尾 160 字节），
+    5000+ 只股票约 1-3 秒完成。
+    """
+    if "_tdx_startup_sync_done" in st.session_state:
+        return
+
+    # 先标记完成，防止异常时重复触发
+    st.session_state._tdx_startup_sync_done = True
+
+    from config import get_tdx_vipdoc_path
+    from data.sync import sync_from_tdx
+    from data.database import get_db_stats
+
+    vipdoc_path = get_tdx_vipdoc_path()
+
+    if vipdoc_path is None:
+        st.session_state._tdx_startup_result = {
+            "status": "not_found",
+            "message": "未检测到券商客户端 (通达信) 数据目录"
+        }
+        return
+
+    try:
+        stats_before = get_db_stats()
+        result = sync_from_tdx(str(vipdoc_path), full_import=False)
+
+        if result.get("errors") and any(
+            "未找到券商客户端目录" in str(e) for e in result["errors"]
+        ):
+            st.session_state._tdx_startup_result = {
+                "status": "no_path",
+                "message": "vipdoc 目录为空或不存在 .day 文件"
+            }
+            return
+
+        stats_after = get_db_stats()
+        new_stocks = result.get("imported", 0)
+        skipped = result.get("skipped", 0)
+        errors = result.get("errors", [])
+
+        st.session_state._tdx_startup_result = {
+            "status": "ok",
+            "new_stocks": new_stocks,
+            "skipped": skipped,
+            "errors": errors,
+            "vipdoc_path": str(vipdoc_path),
+            "stock_count": stats_after.get("stock_count", 0),
+            "max_date": stats_after.get("max_date", ""),
+        }
+    except Exception as e:
+        st.session_state._tdx_startup_result = {
+            "status": "error",
+            "message": str(e)
+        }
+
+
+_startup_tdx_sync()
+
+
 STRATEGY_MAP = {
     "双均线 (MA Cross)": MACrossStrategy,
     "MACD": MACDStrategy,
@@ -131,8 +194,21 @@ if st.session_state.work_mode == "回测":
         st.session_state["run_backtest"] = True
 
     st.sidebar.markdown("---")
-    st.sidebar.caption("数据源: AKShare (新浪/东方财富)")
-    st.sidebar.caption("引擎: backtrader + optuna")
+    # 数据源状态：优先显示 TDX 本地同步结果
+    sync_result = st.session_state.get("_tdx_startup_result", {})
+    if sync_result.get("status") == "ok":
+        st.sidebar.success(
+            f"📡 券商数据已同步\n"
+            f"更新: {sync_result['new_stocks']} 只, 跳过: {sync_result['skipped']} 只\n"
+            f"最新: {sync_result.get('max_date', 'N/A')}"
+        )
+    elif sync_result.get("status") in ("not_found", "no_path"):
+        st.sidebar.caption("📡 券商本地: 未检测到 → 在线获取")
+    elif sync_result.get("status") == "error":
+        st.sidebar.warning(f"⚠️ 券商同步异常: {sync_result.get('message', '')}")
+    else:
+        st.sidebar.caption("数据源: AKShare (新浪/东方财富)")
+    st.sidebar.caption("引擎: backtrader")
 
 else:
     # ═══════════════ 市场分析侧边栏（极简） ═══════════════
@@ -148,8 +224,17 @@ else:
     st.sidebar.caption("当前模式：市场分析")
     st.sidebar.caption("切换至「回测工作台」可运行策略回测")
     st.sidebar.markdown("---")
-    st.sidebar.caption("数据源: AKShare (新浪/东方财富)")
-    st.sidebar.caption("引擎: backtrader + optuna")
+    # 数据源状态
+    sync_result = st.session_state.get("_tdx_startup_result", {})
+    if sync_result.get("status") == "ok":
+        st.sidebar.success(f"📡 券商已同步 | 最新: {sync_result.get('max_date', 'N/A')}")
+    elif sync_result.get("status") in ("not_found", "no_path"):
+        st.sidebar.caption("📡 券商本地: 未检测到 → 在线获取")
+    elif sync_result.get("status") == "error":
+        st.sidebar.warning(f"⚠️ 同步异常: {sync_result.get('message', '')}")
+    else:
+        st.sidebar.caption("数据源: AKShare (新浪/东方财富)")
+    st.sidebar.caption("引擎: backtrader")
 
 # =========================== 主区域 Tab 路由 ===========================
 
