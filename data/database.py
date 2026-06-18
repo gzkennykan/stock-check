@@ -15,9 +15,11 @@ from config import DB_PATH
 # ────────────────────────── 连接管理 ──────────────────────────
 
 def get_connection(read_only: bool = False):
-    """获取 DuckDB 连接（线程安全，每次调用创建新连接）"""
+    """获取 DuckDB 连接（线程安全，每次调用创建新连接）
+    注意: DuckDB 不允许同一数据库文件混用 read_only=True/False 连接，
+    因此统一使用读写模式打开，忽略 read_only 参数。"""
     import duckdb
-    return duckdb.connect(str(DB_PATH), read_only=read_only)
+    return duckdb.connect(str(DB_PATH), read_only=False)
 
 
 def _ensure_tables(conn) -> None:
