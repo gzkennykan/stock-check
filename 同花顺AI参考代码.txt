@@ -1,0 +1,106 @@
+# 整理今日资金结构表，便于在回答中引用
+import pandas as pd
+
+df_struct = res['fund_today_db'].copy() if res.get('fund_today_db') is not None else None
+
+df_net = res['fund_today_db3'].copy() if res.get('fund_today_db3') is not None else None
+
+df_rate = res['fund_today_db2'].copy() if res.get('fund_today_db2') is not None else None
+
+# 合并成一个宽表
+if df_struct is not None:
+    # 统一列名
+    cols_map = {
+        '主力资金流向(元)':'主力净额(元)',
+        '特大单净额(元)':'特大单净额(元)',
+        'dde大单净额(元)':'dde大单净额(元)',
+        '中单净额(元)':'中单净额(元)',
+        '小单净额(元)':'小单净额(元)'
+    }
+    df_struct = df_struct.rename(columns=cols_map)
+
+    # 加入资金净流入额(元)
+    if df_net is not None:
+        tmp = df_net.rename(columns={'资金流向(元)':'资金净流入额(元)'})
+        df_today_wide = df_struct.merge(tmp[['date','资金净流入额(元)']], on='date', how='left')
+    else:
+        df_today_wide = df_struct
+
+    # 加入主力资金净买入率
+    if df_rate is not None:
+        tmp2 = df_rate[['date','主力资金净买入率(%)']].copy()
+        df_today_wide = df_today_wide.merge(tmp2, on='date', how='left')
+
+    # 数值格式化（保留原始数值用于计算，另做展示列）
+    show_cols = ['date','主力净额(元)','特大单净额(元)','dde大单净额(元)','中单净额(元)','小单净额(元)','资金净流入额(元)','主力资金净买入率(%)']
+    df_today_show = df_today_wide[show_cols].copy()
+
+    # 转成亿元便于阅读
+    for c in ['主力净额(元)','特大单净额(元)','dde大单净额(元)','中单净额(元)','小单净额(元)','资金净流入额(元)']:
+        df_today_show[c.replace('(元)','(亿元)')] = df_today_show[c]/1e8
+
+    # 重排
+    df_today_show = df_today_show[['date','主力资金净买入率(%)',
+                                '主力净额(亿元)','特大单净额(亿元)','dde大单净额(亿元)','中单净额(亿元)','小单净额(亿元)','资金净流入额(亿元)']]
+
+    df_today_show
+else:
+    df_today_show=None
+
+df_today_show
+
+
+# 近32个交易日主力资金流向（用于判断今日是否异常）
+import numpy as np
+
+main_hist = df_main_hist.copy()
+main_hist['date']=pd.to_datetime(main_hist['date'])
+main_hist=main_hist.sort_values('date')
+main_hist['主力资金流向(元)']=pd.to_numeric(main_hist['主力资金流向(元)'], errors='coerce')
+
+# 取最近10个交易日
+main_last10 = main_hist.tail(10).copy()
+main_last10['主力资金流向(亿元)']=main_last10['主力资金流向(元)']/1e8
+
+summary = {
+    '近10日主力资金流向均值(亿元)': float(main_last10['主力资金流向(亿元)'].mean()),
+    '近10日主力资金流向中位数(亿元)': float(main_last10['主力资金流向(亿元)'].median()),
+    '近10日主力资金流向最小值(亿元)': float(main_last10['主力资金流向(亿元)'].min()),
+    '近10日主力资金流向最大值(亿元)': float(main_last10['主力资金流向(亿元)'].max()),
+}
+
+main_last10[['date','主力资金流向(亿元)']], summary
+
+
+# 画一个近32日主力资金流向柱状图 + 收盘价折线（双轴）
+import plotly.graph_objects as go
+
+# 合并主力资金与收盘价
+main = df_main_hist.copy()
+main['date']=pd.to_datetime(main['date'])
+main=main.sort_values('date')
+main=main.rename(columns={'主力资金流向(元)':'main_flow'})
+
+px = df_price.copy()
+px['date']=pd.to_datetime(px['date'])
+px=px.sort_values('date')
+px=px.rename(columns={'收盘价:前复权(元)':'close'})
+
+# 合并
+m = pd.merge(px[['date','close']], main[['date','main_flow']], on='date', how='inner')
+
+fig = go.Figure()
+fig.add_trace(go.Bar(x=m['date'], y=m['main_flow']/1e8, name='主力资金流向(亿元)', yaxis='y1'))
+fig.add_trace(go.Scatter(x=m['date'], y=m['close'], name='收盘价(前复权)', yaxis='y2', mode='lines'))
+
+fig.update_layout(
+    title='海螺水泥：主力资金流向 vs 收盘价（近32个交易日）',
+    xaxis=dict(title='日期'),
+    yaxis=dict(title='主力资金流向(亿元)', side='left'),
+    yaxis2=dict(title='收盘价(元)', overlaying='y', side='right'),
+    legend=dict(orientation='h', yanchor='bottom', y=-0.25, xanchor='center', x=0.5),
+    margin=dict(l=40,r=40,t=50,b=60),
+    height=420
+)
+
+fig

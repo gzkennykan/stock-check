@@ -74,6 +74,12 @@ def render():
             display["流入资金"] = display["capital_inflow"].apply(fmt_yuan)
         if "capital_outflow" in display.columns:
             display["流出资金"] = display["capital_outflow"].apply(fmt_yuan)
+        # 净额占成交额比
+        if "turnover" in display.columns:
+            display["净额占比"] = display.apply(
+                lambda r: f"{r['main_capital']/r['turnover']*100:+.1f}%"
+                if r.get("turnover", 0) > 0 else "N/A", axis=1
+            )
         if "turnover_rate" in display.columns:
             display["换手率(%)"] = display["turnover_rate"]
         drop_cols = ["main_capital", "capital_inflow", "capital_outflow", "turnover_rate", "hot_money", "retail_money", "net_flow_pct"]

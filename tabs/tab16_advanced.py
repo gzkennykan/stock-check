@@ -1,4 +1,4 @@
-"""Tab 16: 高级分析 — 多因子排名 + 形态扫描 + 异动检测 + 行业轮动 + K线形态 + 相关性 + 批量回测 + 量化信号"""
+"""Tab 16: 高级分析 — 多因子排名 + 形态扫描 + 异动检测 + 行业轮动 + K线形态 + 相关性 + 批量回测 + 量化信号 + 资金流向"""
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -25,6 +25,7 @@ from data.industry_db import (
 )
 
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 
 
 def _add_names(df: pd.DataFrame, sym_col: str = "symbol") -> pd.DataFrame:
@@ -843,12 +844,208 @@ def _render_quant_signals():
 # ══════════════════════════════════════════════════
 # Main Render
 # ══════════════════════════════════════════════════
+# Sub-tab 9: Individual Stock Fund Flow Analysis
+# ══════════════════════════════════════════════════
+
+def _render_fund_flow():
+    st.subheader("💰 个股资金流向分析")
+    st.caption("东方财富数据 — 按订单大小分层（超大单/大单/中单/小单），主力 = 超大单 + 大单")
+
+    from data.fund_flow import get_individual_fund_flow, get_fund_flow_summary
+
+    col_a, col_b, col_c = st.columns([2, 2, 2])
+    with col_a:
+        code = st.text_input("股票代码", value="600585", key="ff_code",
+                             placeholder="如 600585", max_chars=6).strip()
+    with col_b:
+        days = st.selectbox("统计天数", [5, 10, 20, 30, 60], index=1, key="ff_days")
+    with col_c:
+        st.write("")
+        st.write("")
+        refresh = st.button("🔄 查询", use_container_width=True, key="ff_refresh")
+
+    if not code or len(code) < 6:
+        st.info("请输入6位股票代码查询个股资金流向（数据源: 东方财富）")
+        return
+
+    if not refresh and f"_ff_data_{code}" in st.session_state:
+        df = st.session_state[f"_ff_data_{code}"]
+        summary = st.session_state.get(f"_ff_summary_{code}")
+    else:
+        with st.spinner(f"获取 {code} 资金流向数据..."):
+            df = get_individual_fund_flow(code, force_refresh=refresh)
+            summary = get_fund_flow_summary(code, days=days)
+        st.session_state[f"_ff_data_{code}"] = df
+        st.session_state[f"_ff_summary_{code}"] = summary
+        # 也存到 symbols session
+        st.session_state["symbol"] = code
+
+    if df is None or df.empty:
+        st.warning(f"无法获取 {code} 的资金流向数据。东方财富接口可能暂时不可用，请稍后重试。"
+                   f"\n\n💡 提示：可尝试更换网络环境或稍后再试。")
+        return
+
+    # ── Part A: 近10日统计摘要 ──
+    st.markdown("### 📊 近{}日主力资金统计".format(days))
+
+    if summary:
+        c1, c2, c3, c4, c5, c6 = st.columns(6)
+        today_net = summary["today_main_net_yi"]
+        with c1:
+            st.metric("最新收盘", f"{summary['close']:.2f}",
+                      delta=f"{summary['pct_change']:+.2f}%")
+        with c2:
+            st.metric("今日主力净额", f"{today_net:+.4f}亿")
+        with c3:
+            st.metric("均值", f"{summary['mean']:+.4f}亿")
+        with c4:
+            st.metric("中位数", f"{summary['median']:+.4f}亿")
+        with c5:
+            st.metric("最小值", f"{summary['min']:+.4f}亿")
+        with c6:
+            st.metric("最大值", f"{summary['max']:+.4f}亿")
+
+        # 判断今日 vs 历史
+        if abs(today_net) > 0:
+            avg = summary['mean']
+            if avg != 0:
+                ratio = abs(today_net / avg) if avg != 0 else 0
+                if ratio > 2:
+                    direction = "流入" if today_net > 0 else "流出"
+                    st.warning(f"⚠️ 今日主力资金{direction}异常：为近{days}日均值的 {ratio:.1f} 倍")
+
+    # ── Part B: 最近N日明细表 ──
+    st.divider()
+    st.markdown("### 📋 近{}日资金流明细".format(days))
+
+    recent = df.tail(days).copy()
+    if not recent.empty:
+        tbl = recent[["date", "close", "pct_change",
+                       "主力净额", "超大单净额", "大单净额",
+                       "中单净额", "小单净额"]].copy()
+        tbl = tbl.sort_values("date", ascending=False)
+
+        for c in ["主力净额", "超大单净额", "大单净额", "中单净额", "小单净额"]:
+            if c in tbl.columns:
+                tbl[c] = (tbl[c] / 1e8).round(4)
+
+        tbl["date"] = tbl["date"].dt.strftime("%m/%d")
+        tbl["close"] = tbl["close"].round(2)
+        tbl["pct_change"] = tbl["pct_change"].round(2)
+
+        tbl = tbl.rename(columns={
+            "date": "日期", "close": "收盘价", "pct_change": "涨跌幅(%)",
+            "主力净额": "主力(亿)", "超大单净额": "超大单(亿)",
+            "大单净额": "大单(亿)", "中单净额": "中单(亿)", "小单净额": "小单(亿)",
+        })
+
+        st.dataframe(
+            tbl, use_container_width=True, hide_index=True,
+            column_config={
+                "涨跌幅(%)": st.column_config.NumberColumn(format="%+.2f%%"),
+            },
+        )
+
+    # ── Part C: 今日四档订单结构 ──
+    st.divider()
+    st.markdown("### 🔬 最近交易日订单结构")
+
+    latest = df.iloc[-1]
+    tiers = ["超大单", "大单", "中单", "小单"]
+    net_vals = []
+    pct_vals = []
+    for t in tiers:
+        nc = f"{t}净额"
+        pc = f"{t}净占比"
+        net_vals.append(float(latest.get(nc, 0) or 0) / 1e8)
+        pct_vals.append(float(latest.get(pc, 0) or 0))
+
+    c_left, c_right = st.columns([1, 1])
+    with c_left:
+        colors_net = ["#ef5350" if v < 0 else "#26a69a" for v in net_vals]
+        fig_net = go.Figure(go.Bar(
+            x=tiers, y=net_vals, marker_color=colors_net,
+            text=[f"{v:+.2f}亿" for v in net_vals],
+            textposition="outside",
+        ))
+        fig_net.update_layout(
+            title="各档净额（亿元）", height=350,
+            yaxis_title="亿元",
+        )
+        st.plotly_chart(fig_net, use_container_width=True)
+
+    with c_right:
+        colors_pct = ["#ef5350" if v < 0 else "#26a69a" for v in pct_vals]
+        fig_pct = go.Figure(go.Bar(
+            x=tiers, y=pct_vals, marker_color=colors_pct,
+            text=[f"{v:+.1f}%" for v in pct_vals],
+            textposition="outside",
+        ))
+        fig_pct.update_layout(
+            title="各档净占比（%）", height=350,
+            yaxis_title="%",
+        )
+        st.plotly_chart(fig_pct, use_container_width=True)
+
+    # ── Part D: 主力资金 vs 收盘价 双轴图 ──
+    st.divider()
+    st.markdown("### 📈 主力资金流向 vs 收盘价（近32日）")
+
+    chart_data = df.tail(32).copy()
+    if not chart_data.empty:
+        fig = make_subplots(specs=[[{"secondary_y": True}]])
+
+        # 柱状图: 主力资金
+        colors = ["#ef5350" if v < 0 else "#26a69a" for v in chart_data["主力净额"] / 1e8]
+        fig.add_trace(
+            go.Bar(
+                x=chart_data["date"], y=chart_data["主力净额"] / 1e8,
+                name="主力资金(亿)", marker_color=colors,
+                opacity=0.85,
+            ),
+            secondary_y=False,
+        )
+
+        # 折线: 收盘价
+        fig.add_trace(
+            go.Scatter(
+                x=chart_data["date"], y=chart_data["close"],
+                name="收盘价(元)", mode="lines+markers",
+                line=dict(color="#2196F3", width=2),
+                marker=dict(size=4),
+            ),
+            secondary_y=True,
+        )
+
+        fig.update_layout(
+            title="主力资金流向 vs 收盘价",
+            hovermode="x unified",
+            height=420,
+            legend=dict(orientation="h", yanchor="bottom", y=-0.25, xanchor="center", x=0.5),
+            margin=dict(l=40, r=40, t=50, b=60),
+        )
+        fig.update_yaxes(title_text="主力资金(亿元)", secondary_y=False)
+        fig.update_yaxes(title_text="收盘价(元)", secondary_y=True)
+
+        st.plotly_chart(fig, use_container_width=True)
+
+        # 辅助判断
+        last_5 = chart_data.tail(5)
+        price_up = last_5["close"].iloc[-1] > last_5["close"].iloc[0]
+        fund_in = last_5["主力净额"].sum()
+        if price_up and fund_in < 0:
+            st.warning("⚠️ 近5日：股价上涨但主力净流出 → 量价背离，注意风险")
+        elif not price_up and fund_in > 0:
+            st.info("💡 近5日：股价下跌但主力净流入 → 可能为主力吸筹")
+
+
+# ══════════════════════════════════════════════════
 
 def render():
     st.title("📊 高级分析")
-    st.caption("DuckDB 驱动 — 多因子 · 形态 · 异动 · 蜡烛 · 相关性 · 批量回测 · 量化信号")
+    st.caption("DuckDB 驱动 — 多因子 · 形态 · 异动 · 行业轮动 · 蜡烛 · 相关性 · 批量回测 · 量化信号 · 资金流向")
 
-    sub1, sub2, sub3, sub4, sub5, sub6, sub7, sub8 = st.tabs([
+    sub1, sub2, sub3, sub4, sub5, sub6, sub7, sub8, sub9 = st.tabs([
         "🎯 多因子排名",
         "📐 形态扫描",
         "⚡ 异动检测",
@@ -857,6 +1054,7 @@ def render():
         "🔗 相关性",
         "🚀 批量回测",
         "📡 量化信号",
+        "💰 资金流向",
     ])
 
     with sub1: _render_factor_ranking()
@@ -867,3 +1065,4 @@ def render():
     with sub6: _render_correlation()
     with sub7: _render_batch_backtest()
     with sub8: _render_quant_signals()
+    with sub9: _render_fund_flow()
