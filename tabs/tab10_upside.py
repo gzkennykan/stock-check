@@ -4,7 +4,7 @@ import pandas as pd
 from datetime import datetime
 from data.screener import get_combined_data
 from data.factors import compute_upside_score
-from utils import fmt_yuan
+from utils import fmt_yuan, format_stock_display
 
 
 def render():
@@ -59,26 +59,13 @@ def render():
     show_cols = [c for c in show_cols if c in v_display.columns]
     v_display = v_display[show_cols]
 
-    v_display["price"] = v_display["price"].round(2)
-    v_display["pct_change"] = v_display["pct_change"].round(2)
     v_display["upside_score"] = v_display["upside_score"].round(0).astype(int)
-    if "turnover_rate" in v_display.columns:
-        v_display["turnover_rate"] = v_display["turnover_rate"].round(2)
-    if "pe" in v_display.columns:
-        v_display["pe"] = v_display["pe"].round(1)
-
     if "main_capital" in v_display.columns:
         v_display["资金净额"] = v_display["main_capital"].apply(lambda x: fmt_yuan(x, signed=True))
 
-    v_display = v_display.rename(columns={
-        "code": "代码", "name": "名称", "price": "最新价",
-        "pct_change": "涨跌幅(%)", "upside_score": "值博率",
-        "turnover_rate": "换手率(%)", "pe": "PE(市盈率)",
-        "industry": "行业",
-    })
-
-    drop_cols = ["main_capital"]
-    v_display = v_display[[c for c in v_display.columns if c not in drop_cols]]
+    v_display = format_stock_display(v_display,
+        extra_rename={"upside_score": "值博率", "pe": "PE(市盈率)"},
+        drop_after=["main_capital"])
 
     st.dataframe(
         v_display,

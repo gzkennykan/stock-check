@@ -268,7 +268,8 @@ else:
 
 # =========================== 主区域 Tab 路由 ===========================
 
-tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10, tab11, tab12, tab13 = st.tabs([
+tab_wf, tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10, tab11, tab12, tab13 = st.tabs([
+    "📋 选股工作流",
     "📊 单策略回测", "📋 策略对比", "🔧 参数优化",
     "💰 资金排名",
     "🧠 智能选股", "🐉 强势股", "🔥 值博率",
@@ -276,6 +277,7 @@ tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10, tab11, tab12, tab13
     "🗄️ 数据中心", "📊 高级分析",
 ])
 
+from tabs.tab_workflow import render as render_wf
 from tabs.tab1_backtest import render as render_tab1
 from tabs.tab2_compare import render as render_tab2
 from tabs.tab3_optimize import render as render_tab3
@@ -289,6 +291,9 @@ from tabs.tab13_fundamental import render as render_tab10
 from tabs.tab14_industry import render as render_tab11
 from tabs.tab15_database import render as render_tab12
 from tabs.tab16_advanced import render as render_tab13
+
+with tab_wf:
+    render_wf()
 
 with tab1:
     render_tab1()

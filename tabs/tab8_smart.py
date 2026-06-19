@@ -3,7 +3,7 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime
 from data.screener import get_combined_data, smart_screen, get_industry_list
-from utils import fmt_yuan
+from utils import fmt_yuan, format_stock_display
 
 
 def render():
@@ -238,7 +238,6 @@ def render():
                      "pe", "pb", "market_cap", "turnover_rate",
                      "volume", "turnover",
                      "main_capital", "capital_inflow", "capital_outflow", "industry"]
-        # 添加基本面字段（如果存在）
         extra_fin_cols = ["roe", "gross_margin", "net_margin",
                           "revenue_yoy", "profit_yoy", "debt_ratio"]
         for efc in extra_fin_cols:
@@ -247,19 +246,7 @@ def render():
         cols_show = [c for c in cols_show if c in display.columns]
         display = display[cols_show]
 
-        display["price"] = display["price"].round(2)
-        display["pct_change"] = display["pct_change"].round(2)
-        if "pe" in display.columns:
-            display["pe"] = display["pe"].round(1)
-        if "pb" in display.columns:
-            display["pb"] = display["pb"].round(2)
-        if "turnover_rate" in display.columns:
-            display["turnover_rate"] = display["turnover_rate"].round(2)
-        if "volume" in display.columns:
-            display["volume"] = display["volume"].fillna(0).astype(int)
-        if "turnover" in display.columns:
-            display["turnover"] = display["turnover"].fillna(0).astype(int)
-
+        # 资金格式化
         if "main_capital" in display.columns:
             display["资金净额"] = display["main_capital"].apply(lambda x: fmt_yuan(x, signed=True))
         if "capital_inflow" in display.columns:
@@ -270,8 +257,6 @@ def render():
             display["总市值(亿)"] = display["market_cap"].apply(
                 lambda x: f"{x/10000:.1f}" if pd.notna(x) and x > 0 else "-"
             )
-
-        # 格式化基本面字段
         for fcol, flabel in [
             ("roe", "ROE(%)"), ("gross_margin", "毛利率(%)"),
             ("net_margin", "净利率(%)"), ("revenue_yoy", "营收增速(%)"),
@@ -279,16 +264,10 @@ def render():
         ]:
             if fcol in display.columns:
                 display[flabel] = display[fcol].apply(
-                    lambda x, _col=fcol: f"{x:.1f}%" if pd.notna(x) else "N/A"
+                    lambda x: f"{x:.1f}%" if pd.notna(x) else "N/A"
                 )
 
-        display = display.rename(columns={
-            "code": "代码", "name": "名称", "price": "最新价",
-            "pct_change": "涨跌幅(%)", "pe": "PE(市盈率)", "pb": "PB(市净率)",
-            "turnover_rate": "换手率(%)", "volume": "成交量(手)",
-            "turnover": "成交额(元)", "industry": "行业",
-        })
-
+        display = format_stock_display(display, extra_rename={"pe": "PE(市盈率)", "pb": "PB(市净率)"})
         drop_cols = ["main_capital", "capital_inflow", "capital_outflow", "market_cap",
                      "roe", "gross_margin", "net_margin",
                      "revenue_yoy", "profit_yoy", "debt_ratio"]

@@ -52,14 +52,14 @@ def _fetch_daily_ranking_from_10jqka() -> pd.DataFrame:
     df["turnover_rate"] = pd.to_numeric(df["turnover_rate"], errors="coerce")
 
     # 资金列（带"亿"/"万"单位）
-    from data.screener import _parse_cn_money
+    from utils import parse_cn_money
     for src, dst in [
         ("capital_inflow_str", "capital_inflow"),
         ("capital_outflow_str", "capital_outflow"),
         ("main_capital_str", "main_capital"),
         ("turnover_str", "turnover"),
     ]:
-        df[dst] = df[src].apply(_parse_cn_money)
+        df[dst] = df[src].apply(parse_cn_money)
 
     df = df.drop(columns=["pct_change_str", "turnover_rate_str",
                            "capital_inflow_str", "capital_outflow_str",

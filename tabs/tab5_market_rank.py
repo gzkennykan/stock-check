@@ -1,30 +1,13 @@
-"""Tab 5: 资金排名 — 主力流入/流出/成交额 TOP50 三合一"""
+"""Tab 5: 资金排名 — 资金净额/成交额 TOP50"""
 import streamlit as st
-import pandas as pd
 from data.screener import get_fund_flow_data, get_stock_list, get_top_turnover
-from utils import fmt_yuan
+from utils import fmt_yuan, search_stocks, format_stock_display
 
 VIEWS = {
     "inflow": {"title": "资金净流入 TOP50", "source": "同花顺"},
     "outflow": {"title": "资金净流出 TOP50", "source": "同花顺"},
     "turnover": {"title": "成交额 TOP50", "source": "新浪行情"},
 }
-
-
-def _get_fund_flow_fast():
-    """
-    优先从本地 DuckDB 快照读取资金流排名（秒级），
-    若快照不存在则 fallback 到在线抓取同花顺（30-60秒）。
-    """
-    from data.database import get_fund_flow_ranking, get_fund_flow_latest_date
-    latest = get_fund_flow_latest_date()
-    if latest:
-        df = get_fund_flow_ranking(date=latest, sort_by="main_net", limit=6000)
-        if not df.empty:
-            # 适配 tab5 期望的列名
-            df = df.rename(columns={"symbol": "code", "main_net": "main_capital"})
-            return df
-    return None
 
 
 def render():
@@ -43,7 +26,7 @@ def render():
     with col_refresh:
         refresh = st.button("🔄 刷新数据", use_container_width=True, key="rank_refresh")
     with col_info:
-        st.caption(f"数据源: {VIEWS[view]['source']}，每5分钟缓存")
+        st.caption(f"数据源: {VIEWS[view]['source']} (DuckDB)")
 
     kw = st.text_input("🔍 搜索代码/名称", key="rank_search",
                        placeholder="输入股票代码或名称从全市场搜索...")
@@ -51,21 +34,15 @@ def render():
     with st.spinner("加载中..."):
         try:
             if view == "turnover":
-                if kw:
-                    full = get_stock_list()
-                    mask = (full["code"].astype(str).str.contains(kw.lower()) |
-                            full["name"].astype(str).str.lower().str.contains(kw.lower()))
-                    display = full[mask].copy()
-                else:
+                full = get_stock_list()
+                display = search_stocks(full, kw).copy()
+                if not kw:
                     display = get_top_turnover(50).copy()
             else:
                 full = get_fund_flow_data()
                 full = full[~full["name"].astype(str).str.contains("ST|退")]
-                if kw:
-                    mask = (full["code"].astype(str).str.contains(kw.lower()) |
-                            full["name"].astype(str).str.lower().str.contains(kw.lower()))
-                    display = full[mask].copy()
-                else:
+                display = search_stocks(full, kw).copy()
+                if not kw:
                     asc = (view == "outflow")
                     display = full.sort_values("main_capital", ascending=asc).head(50).copy()
         except Exception as e:
@@ -76,14 +53,8 @@ def render():
         st.info("暂无数据" if not kw else f"未找到匹配 '{kw}' 的股票")
         return
 
-    display["price"] = display["price"].round(2)
-    display["pct_change"] = display["pct_change"].round(2)
-    if "volume" in display.columns:
-        display["volume"] = display["volume"].fillna(0).astype(int)
-    if "turnover" in display.columns:
-        display["turnover"] = display["turnover"].fillna(0).astype(int)
-
-    # 资金流视图
+    # 资金流特殊列
+    extra_cols = {}
     if view in ("inflow", "outflow"):
         label = "资金净流入" if view == "inflow" else "资金净流出"
         display[label] = display["main_capital"].apply(lambda x: fmt_yuan(x, signed=True))
@@ -91,33 +62,19 @@ def render():
             display["流入资金"] = display["capital_inflow"].apply(fmt_yuan)
         if "capital_outflow" in display.columns:
             display["流出资金"] = display["capital_outflow"].apply(fmt_yuan)
-        # 净额占成交额比
         if "turnover" in display.columns:
             display["净额占比"] = display.apply(
                 lambda r: f"{r['main_capital']/r['turnover']*100:+.1f}%"
                 if r.get("turnover", 0) > 0 else "N/A", axis=1
             )
-        if "turnover_rate" in display.columns:
-            display["换手率(%)"] = display["turnover_rate"]
-        drop_cols = ["main_capital", "capital_inflow", "capital_outflow", "turnover_rate", "hot_money", "retail_money", "net_flow_pct"]
-        display = display.drop(columns=[c for c in drop_cols if c in display.columns], errors="ignore")
+        display = format_stock_display(display,
+            drop_after=["main_capital", "capital_inflow", "capital_outflow",
+                        "turnover_rate", "hot_money", "retail_money", "net_flow_pct"])
     else:
         display["成交额显示"] = display["turnover"].apply(fmt_yuan)
-
-    display = display.rename(columns={
-        "code": "代码", "name": "名称", "price": "最新价", "pct_change": "涨跌幅(%)",
-        "volume": "成交量(手)", "turnover": "成交额(元)",
-        "pe": "市盈率", "pb": "市净率",
-        "market_cap": "总市值", "circulating_cap": "流通市值",
-        "turnover_rate": "换手率(%)",
-        "open": "今开", "high": "最高", "low": "最低", "prev_close": "昨收",
-        "change": "涨跌额",
-    })
+        display = format_stock_display(display)
 
     st.dataframe(
-        display,
-        use_container_width=True, hide_index=True,
-        column_config={
-            "涨跌幅(%)": st.column_config.NumberColumn(format="%.2f%%"),
-        },
+        display, use_container_width=True, hide_index=True,
+        column_config={"涨跌幅(%)": st.column_config.NumberColumn(format="%.2f%%")},
     )

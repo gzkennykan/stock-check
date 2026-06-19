@@ -6,7 +6,6 @@ import numpy as np
 import pandas as pd
 from datetime import datetime
 from pathlib import Path
-from io import StringIO
 from utils import get_cache_ttl, retry, retry_call
 
 _CACHE_DIR = Path(__file__).parent.parent / "data_cache"
@@ -15,9 +14,6 @@ _CACHE_TTL_MINUTES = 5  # 缓存5分钟，避免频繁请求
 
 _INDUSTRY_CACHE_FILE = _CACHE_DIR / "_industry_mapping.csv"
 _INDUSTRY_TTL_HOURS = 168  # 行业分类极少变动，缓存7天
-
-_FUND_FLOW_CACHE_FILE = _CACHE_DIR / "_fund_flow_cache.csv"
-_FUND_FLOW_TTL_MINUTES = 5
 
 
 def _fetch_spot_data() -> pd.DataFrame:
@@ -358,152 +354,20 @@ def screen_stocks(df: pd.DataFrame,
 
 # ════════════════ 资金流向 & 成交额排行 ════════════════
 
-def _parse_cn_money(val: str) -> float:
-    """解析带中文单位的金额字符串，如 '18.47亿' → 1847000000, '1.27万' → 12700"""
-    if isinstance(val, (int, float)):
-        return float(val)
-    val = str(val).strip()
-    if not val:
-        return 0.0
-    num_str = val.rstrip("亿万千百")
-    unit = val[len(num_str):]
-    try:
-        num = float(num_str)
-    except ValueError:
-        return 0.0
-    if "亿" in unit:
-        num *= 100_000_000
-    elif "万" in unit:
-        num *= 10_000
-    return num
-
-
-def _fetch_fund_flow_page(v_code: str, page: int) -> pd.DataFrame:
-    """获取单页同花顺个股资金流向数据"""
-    import requests
-    url = f"http://data.10jqka.com.cn/funds/ggzjl/field/zdf/order/desc/page/{page}/ajax/1/free/1/"
-    headers = {
-        "Accept": "text/html, */*; q=0.01",
-        "Accept-Encoding": "gzip, deflate",
-        "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
-        "hexin-v": v_code,
-        "Referer": "http://data.10jqka.com.cn/funds/hyzjl/",
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-        "X-Requested-With": "XMLHttpRequest",
-    }
-    r = requests.get(url, headers=headers, timeout=15)
-    if r.status_code != 200:
-        raise RuntimeError(f"HTTP {r.status_code}")
-    return pd.read_html(StringIO(r.text))[0]
-
-
-_V_CODE_MINIRACER = None
-_JS_CONTENT = None
-
-
-def _get_v_code() -> str:
-    """生成同花顺接口所需的 hexin-v 验证码（复用 MiniRacer 实例）"""
-    global _V_CODE_MINIRACER, _JS_CONTENT
-    import py_mini_racer
-    import akshare.stock_feature.stock_fund_flow as ths_mod
-    if _V_CODE_MINIRACER is None:
-        _V_CODE_MINIRACER = py_mini_racer.MiniRacer()
-        _JS_CONTENT = ths_mod._get_file_content_ths("ths.js")
-        _V_CODE_MINIRACER.eval(_JS_CONTENT)
-    return _V_CODE_MINIRACER.call("v")
-
-
-def _fetch_all_fund_flow() -> pd.DataFrame:
-    """从同花顺获取全部个股资金流向数据，104页约5200只股票"""
-    import requests
-    from bs4 import BeautifulSoup
-
-    v_code = _get_v_code()
-    headers = {
-        "Accept": "text/html, */*; q=0.01",
-        "Accept-Encoding": "gzip, deflate",
-        "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
-        "hexin-v": v_code,
-        "Referer": "http://data.10jqka.com.cn/funds/hyzjl/",
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-        "X-Requested-With": "XMLHttpRequest",
-    }
-    # 获取第一页（同时取得总页数）
-    url = "http://data.10jqka.com.cn/funds/ggzjl/field/zdf/order/desc/page/1/ajax/1/free/1/"
-    r = requests.get(url, headers=headers, timeout=15)
-    if r.status_code != 200:
-        raise RuntimeError(f"获取资金流向失败: HTTP {r.status_code}")
-
-    soup = BeautifulSoup(r.text, "lxml")
-    page_info = soup.find("span", class_="page_info")
-    total_pages = int(page_info.text.split("/")[1]) if page_info else 104
-    all_pages = [pd.read_html(StringIO(r.text))[0]]
-
-    # 获取剩余页
-    import random as _random
-    import time as _time
-    for page in range(2, total_pages + 1):
-        v_code = _get_v_code()
-        headers["hexin-v"] = v_code
-        try:
-            r = requests.get(url.replace("/page/1/", f"/page/{page}/"), headers=headers, timeout=15)
-            if r.status_code == 200:
-                all_pages.append(pd.read_html(StringIO(r.text))[0])
-        except Exception:
-            continue
-        _time.sleep(_random.uniform(0.2, 0.6))  # 分页节流，降低触发风控概率
-
-    df = pd.concat(all_pages, ignore_index=True)
-    # 2024版同花顺列结构: 序号, 股票代码, 股票简称, 最新价, 涨跌幅, 换手率, 流入资金(元), 流出资金(元), 净额(元), 成交额(元)
-    # 注意: 同花顺已不再按 主力/游资/散户 分类，改为 流入/流出/净额
-    df.columns = ["rank", "code", "name", "price", "pct_change_str",
-                   "turnover_rate", "capital_inflow", "capital_outflow",
-                   "main_capital", "volume_str"]
-    df = df.drop(columns=["rank"])
-
-    # 清洗数值列
-    for col in ["price", "pct_change_str"]:
-        df[col] = pd.to_numeric(
-            df[col].astype(str).str.replace("%", "", regex=False), errors="coerce"
-        )
-    df["pct_change"] = df["pct_change_str"]
-
-    # 资金列（可能带"亿"/"万"单位）
-    for money_col in ["capital_inflow", "capital_outflow", "main_capital"]:
-        df[money_col] = df[money_col].apply(_parse_cn_money)
-
-    # 换手率
-    if "turnover_rate" in df.columns:
-        df["turnover_rate"] = pd.to_numeric(
-            df["turnover_rate"].astype(str).str.replace("%", "", regex=False),
-            errors="coerce"
-        )
-
-    # 成交额也解析一下
-    if "volume_str" in df.columns:
-        df["turnover"] = df["volume_str"].apply(_parse_cn_money)
-
-    df["code"] = df["code"].astype(str).str.strip().str.zfill(6)
-    df = df.drop(columns=["pct_change_str", "volume_str"], errors="ignore")
-
-    return df
-
-
-def _is_fund_flow_cache_fresh() -> bool:
-    if not _FUND_FLOW_CACHE_FILE.exists():
-        return False
-    mtime = datetime.fromtimestamp(_FUND_FLOW_CACHE_FILE.stat().st_mtime)
-    return (datetime.now() - mtime).total_seconds() < get_cache_ttl(5, 30) * 60
-
-
 def get_fund_flow_data(force_refresh: bool = False) -> pd.DataFrame:
-    """获取全市场资金流向数据，自动缓存"""
-    if not force_refresh and _is_fund_flow_cache_fresh():
-        return pd.read_csv(_FUND_FLOW_CACHE_FILE, dtype={"code": str})
-
-    df = _fetch_all_fund_flow()
-    _CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    df.to_csv(_FUND_FLOW_CACHE_FILE, index=False)
+    """获取全市场资金流向数据（从 DuckDB 本地快照，秒级）"""
+    from data.database import get_fund_flow_ranking, get_fund_flow_latest_date
+    latest = get_fund_flow_latest_date()
+    if latest is None:
+        return pd.DataFrame(columns=["code", "name", "price", "pct_change",
+                                      "main_capital", "capital_inflow",
+                                      "capital_outflow", "turnover_rate", "turnover"])
+    df = get_fund_flow_ranking(date=latest, sort_by="main_net", limit=6000)
+    if df.empty:
+        return pd.DataFrame(columns=["code", "name", "price", "pct_change",
+                                      "main_capital", "capital_inflow",
+                                      "capital_outflow", "turnover_rate", "turnover"])
+    df = df.rename(columns={"symbol": "code", "main_net": "main_capital"})
     return df
 
 
@@ -546,18 +410,15 @@ def get_combined_data(force_refresh: bool = False) -> pd.DataFrame:
         age_sec = (datetime.now() - datetime.fromtimestamp(
             _COMBINED_CACHE_FILE.stat().st_mtime)).total_seconds()
         if age_sec < get_cache_ttl(15, 60) * 60:
-            # 确认源数据缓存不新于合并缓存（防止源数据已刷新但合并缓存是旧的）
+            # 确认源数据缓存不新于合并缓存
             combined_mtime = datetime.fromtimestamp(_COMBINED_CACHE_FILE.stat().st_mtime)
-            sources_ok = True
-            if _FUND_FLOW_CACHE_FILE.exists():
-                ff_mtime = datetime.fromtimestamp(_FUND_FLOW_CACHE_FILE.stat().st_mtime)
-                if ff_mtime > combined_mtime:
-                    sources_ok = False
             if _CACHE_FILE.exists():
                 spot_mtime = datetime.fromtimestamp(_CACHE_FILE.stat().st_mtime)
                 if spot_mtime > combined_mtime:
-                    sources_ok = False
-            if sources_ok:
+                    pass  # fall through to re-merge
+                else:
+                    return pd.read_csv(_COMBINED_CACHE_FILE, dtype={"code": str, "industry": str})
+            else:
                 return pd.read_csv(_COMBINED_CACHE_FILE, dtype={"code": str, "industry": str})
 
     # 1. 行情数据（含 PE/PB/市值）
