@@ -454,22 +454,37 @@ def _fetch_all_fund_flow() -> pd.DataFrame:
         _time.sleep(_random.uniform(0.2, 0.6))  # 分页节流，降低触发风控概率
 
     df = pd.concat(all_pages, ignore_index=True)
-    # 列名: 序号, 股票代码, 股票名称, 最新价, 涨跌幅, 净流量, 主力资金(元), 游资(元), 散户(元), 成交量(元)
+    # 2024版同花顺列结构: 序号, 股票代码, 股票简称, 最新价, 涨跌幅, 换手率, 流入资金(元), 流出资金(元), 净额(元), 成交额(元)
+    # 注意: 同花顺已不再按 主力/游资/散户 分类，改为 流入/流出/净额
     df.columns = ["rank", "code", "name", "price", "pct_change_str",
-                   "net_flow_pct", "main_capital", "hot_money",
-                   "retail_money", "volume_str"]
+                   "turnover_rate", "capital_inflow", "capital_outflow",
+                   "main_capital", "volume_str"]
     df = df.drop(columns=["rank"])
 
     # 清洗数值列
-    for col in ["price", "pct_change_str", "net_flow_pct"]:
+    for col in ["price", "pct_change_str"]:
         df[col] = pd.to_numeric(
             df[col].astype(str).str.replace("%", "", regex=False), errors="coerce"
         )
     df["pct_change"] = df["pct_change_str"]
-    for money_col in ["main_capital", "hot_money", "retail_money"]:
+
+    # 资金列（可能带"亿"/"万"单位）
+    for money_col in ["capital_inflow", "capital_outflow", "main_capital"]:
         df[money_col] = df[money_col].apply(_parse_cn_money)
+
+    # 换手率
+    if "turnover_rate" in df.columns:
+        df["turnover_rate"] = pd.to_numeric(
+            df["turnover_rate"].astype(str).str.replace("%", "", regex=False),
+            errors="coerce"
+        )
+
+    # 成交额也解析一下
+    if "volume_str" in df.columns:
+        df["turnover"] = df["volume_str"].apply(_parse_cn_money)
+
     df["code"] = df["code"].astype(str).str.strip().str.zfill(6)
-    df = df.drop(columns=["pct_change_str", "volume_str"])
+    df = df.drop(columns=["pct_change_str", "volume_str"], errors="ignore")
 
     return df
 
@@ -493,17 +508,17 @@ def get_fund_flow_data(force_refresh: bool = False) -> pd.DataFrame:
 
 
 def get_top_capital_inflow(n: int = 50) -> pd.DataFrame:
-    """资金净流入（主力资金）最多的 N 只个股"""
+    """资金净流入最多的 N 只个股"""
     df = get_fund_flow_data()
     top = df.nlargest(n, "main_capital")
-    return top[["code", "name", "price", "pct_change", "main_capital", "retail_money"]].reset_index(drop=True)
+    return top[["code", "name", "price", "pct_change", "main_capital"]].reset_index(drop=True)
 
 
 def get_top_capital_outflow(n: int = 50) -> pd.DataFrame:
-    """资金净流出（主力资金卖出）最多的 N 只个股"""
+    """资金净流出最多的 N 只个股"""
     df = get_fund_flow_data()
     top = df.nsmallest(n, "main_capital")
-    return top[["code", "name", "price", "pct_change", "main_capital", "retail_money"]].reset_index(drop=True)
+    return top[["code", "name", "price", "pct_change", "main_capital"]].reset_index(drop=True)
 
 
 def get_top_turnover(n: int = 50) -> pd.DataFrame:
@@ -555,8 +570,8 @@ def get_combined_data(force_refresh: bool = False) -> pd.DataFrame:
     # 2. 资金流数据
     try:
         flow = get_fund_flow_data()
-        flow_cols = [c for c in ["code", "main_capital", "hot_money",
-                                  "retail_money", "net_flow_pct"] if c in flow.columns]
+        flow_cols = [c for c in ["code", "main_capital", "capital_inflow",
+                                  "capital_outflow", "turnover_rate"] if c in flow.columns]
         flow = flow[flow_cols]
     except Exception:
         flow = pd.DataFrame(columns=["code"])
@@ -586,7 +601,7 @@ def get_combined_data(force_refresh: bool = False) -> pd.DataFrame:
     merged["industry"] = merged["industry"].fillna("")
 
     # 填充缺失的资金流数据
-    for col in ["main_capital", "hot_money", "retail_money", "net_flow_pct"]:
+    for col in ["main_capital", "capital_inflow", "capital_outflow", "turnover_rate"]:
         if col in merged.columns:
             merged[col] = merged[col].fillna(0)
         else:

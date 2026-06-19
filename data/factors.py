@@ -357,14 +357,19 @@ def compute_upside_score(df: pd.DataFrame) -> pd.Series:
     """
     idx = df.index
 
-    # 1. 资金流入强度 (0-27)
-    total_inflow = df.get("main_capital", pd.Series(0, index=idx)).fillna(0) + \
-                   df.get("hot_money", pd.Series(0, index=idx)).fillna(0)
+    # 1. 资金流入强度 (0-27) — 用总流入资金衡量
+    total_inflow = df.get("capital_inflow", pd.Series(0, index=idx)).fillna(0)
     inflow_score = (np.log10(total_inflow.clip(lower=0) + 1) / 9.0 * 27).clip(0, 27)
 
-    # 2. 净流入占比 (0-17)
-    net_pct = df.get("net_flow_pct", pd.Series(0, index=idx)).fillna(0).clip(0, 20)
-    pct_score = (net_pct / 20 * 17).clip(0, 17)
+    # 2. 净流入占比 (0-17) — main_capital 净额 / (总流入+总流出)
+    cap_in = df.get("capital_inflow", pd.Series(0, index=idx)).fillna(0)
+    cap_out = df.get("capital_outflow", pd.Series(0, index=idx)).fillna(0)
+    cap_net = df.get("main_capital", pd.Series(0, index=idx)).fillna(0)
+    total_flow = cap_in + cap_out
+    net_pct = np.where(total_flow > 0, cap_net / total_flow * 100, 0)
+    net_pct = pd.Series(net_pct, index=idx).clip(-20, 20)
+    # 正向净流入得分高
+    pct_score = ((net_pct + 20) / 40 * 17).clip(0, 17)
 
     # 3. 涨幅合理性 (0-16)
     pct_change = df.get("pct_change", pd.Series(0, index=idx)).fillna(0)

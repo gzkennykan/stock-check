@@ -4,8 +4,8 @@ from data.screener import get_fund_flow_data, get_stock_list, get_top_turnover
 from utils import fmt_yuan
 
 VIEWS = {
-    "inflow": {"title": "主力资金净流入 TOP50", "source": "同花顺"},
-    "outflow": {"title": "主力资金净流出 TOP50", "source": "同花顺"},
+    "inflow": {"title": "资金净流入 TOP50", "source": "同花顺"},
+    "outflow": {"title": "资金净流出 TOP50", "source": "同花顺"},
     "turnover": {"title": "成交额 TOP50", "source": "新浪行情"},
 }
 
@@ -18,8 +18,8 @@ def render():
         view = st.selectbox(
             "排行类型",
             options=["inflow", "outflow", "turnover"],
-            format_func=lambda v: {"inflow": "主力净流入 TOP50",
-                                   "outflow": "主力净流出 TOP50",
+            format_func=lambda v: {"inflow": "资金净流入 TOP50",
+                                   "outflow": "资金净流出 TOP50",
                                    "turnover": "成交额 TOP50"}[v],
             key="rank_view",
         )
@@ -66,17 +66,18 @@ def render():
     if "turnover" in display.columns:
         display["turnover"] = display["turnover"].fillna(0).astype(int)
 
-    # 资金流视图：用中文值替换英文列，并删除英文列
+    # 资金流视图
     if view in ("inflow", "outflow"):
-        label = "主力净流入" if view == "inflow" else "主力净流出"
+        label = "资金净流入" if view == "inflow" else "资金净流出"
         display[label] = display["main_capital"].apply(lambda x: fmt_yuan(x, signed=True))
-        display["散户资金"] = display["retail_money"].apply(lambda x: fmt_yuan(x, signed=True))
-        if "hot_money" in display.columns:
-            display["游资"] = display["hot_money"].apply(lambda x: fmt_yuan(x, signed=True))
-        if "net_flow_pct" in display.columns:
-            display["净流入占比(%)"] = display["net_flow_pct"].apply(lambda x: f"{x:+.2f}%")
-        display = display.drop(columns=["main_capital", "retail_money",
-                                         "hot_money", "net_flow_pct"], errors="ignore")
+        if "capital_inflow" in display.columns:
+            display["流入资金"] = display["capital_inflow"].apply(fmt_yuan)
+        if "capital_outflow" in display.columns:
+            display["流出资金"] = display["capital_outflow"].apply(fmt_yuan)
+        if "turnover_rate" in display.columns:
+            display["换手率(%)"] = display["turnover_rate"]
+        drop_cols = ["main_capital", "capital_inflow", "capital_outflow", "turnover_rate", "hot_money", "retail_money", "net_flow_pct"]
+        display = display.drop(columns=[c for c in drop_cols if c in display.columns], errors="ignore")
     else:
         display["成交额显示"] = display["turnover"].apply(fmt_yuan)
 

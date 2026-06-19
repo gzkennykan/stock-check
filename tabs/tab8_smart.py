@@ -146,9 +146,9 @@ def render():
                 "price": "最新价",
                 "volume": "成交量",
                 "turnover": "成交额",
-                "main_capital": "主力净流入",
-                "hot_money": "游资金额",
-                "net_flow_pct": "净流入占比",
+                "main_capital": "资金净额",
+                "capital_inflow": "资金流入",
+                "capital_outflow": "资金流出",
                 "pe": "市盈率(PE)",
                 "pb": "市净率(PB)",
                 "market_cap": "总市值",
@@ -237,7 +237,7 @@ def render():
         cols_show = ["code", "name", "price", "pct_change",
                      "pe", "pb", "market_cap", "turnover_rate",
                      "volume", "turnover",
-                     "main_capital", "hot_money", "net_flow_pct", "industry"]
+                     "main_capital", "capital_inflow", "capital_outflow", "industry"]
         # 添加基本面字段（如果存在）
         extra_fin_cols = ["roe", "gross_margin", "net_margin",
                           "revenue_yoy", "profit_yoy", "debt_ratio"]
@@ -261,11 +261,11 @@ def render():
             display["turnover"] = display["turnover"].fillna(0).astype(int)
 
         if "main_capital" in display.columns:
-            display["主力净流入"] = display["main_capital"].apply(lambda x: fmt_yuan(x, signed=True))
-        if "hot_money" in display.columns:
-            display["游资"] = display["hot_money"].apply(lambda x: fmt_yuan(x, signed=True))
-        if "net_flow_pct" in display.columns:
-            display["净流入占比"] = display["net_flow_pct"].apply(lambda x: f"{x:+.2f}%" if x != 0 else "0%")
+            display["资金净额"] = display["main_capital"].apply(lambda x: fmt_yuan(x, signed=True))
+        if "capital_inflow" in display.columns:
+            display["流入资金"] = display["capital_inflow"].apply(fmt_yuan)
+        if "capital_outflow" in display.columns:
+            display["流出资金"] = display["capital_outflow"].apply(fmt_yuan)
         if "market_cap" in display.columns:
             display["总市值(亿)"] = display["market_cap"].apply(
                 lambda x: f"{x/10000:.1f}" if pd.notna(x) and x > 0 else "-"
@@ -289,7 +289,7 @@ def render():
             "turnover": "成交额(元)", "industry": "行业",
         })
 
-        drop_cols = ["main_capital", "hot_money", "net_flow_pct", "market_cap",
+        drop_cols = ["main_capital", "capital_inflow", "capital_outflow", "market_cap",
                      "roe", "gross_margin", "net_margin",
                      "revenue_yoy", "profit_yoy", "debt_ratio"]
         display = display[[c for c in display.columns if c not in drop_cols]]

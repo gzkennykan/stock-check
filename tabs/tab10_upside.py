@@ -55,7 +55,7 @@ def render():
 
     v_display = v_top.copy()
     show_cols = ["code", "name", "price", "pct_change", "upside_score",
-                 "main_capital", "net_flow_pct", "turnover_rate", "pe", "industry"]
+                 "main_capital", "turnover_rate", "pe", "industry"]
     show_cols = [c for c in show_cols if c in v_display.columns]
     v_display = v_display[show_cols]
 
@@ -68,9 +68,7 @@ def render():
         v_display["pe"] = v_display["pe"].round(1)
 
     if "main_capital" in v_display.columns:
-        v_display["主力净流入"] = v_display["main_capital"].apply(lambda x: fmt_yuan(x, signed=True))
-    if "net_flow_pct" in v_display.columns:
-        v_display["净流入占比"] = v_display["net_flow_pct"].apply(lambda x: f"{x:+.2f}%" if x != 0 else "0%")
+        v_display["资金净额"] = v_display["main_capital"].apply(lambda x: fmt_yuan(x, signed=True))
 
     v_display = v_display.rename(columns={
         "code": "代码", "name": "名称", "price": "最新价",
@@ -79,7 +77,7 @@ def render():
         "industry": "行业",
     })
 
-    drop_cols = ["main_capital", "net_flow_pct"]
+    drop_cols = ["main_capital"]
     v_display = v_display[[c for c in v_display.columns if c not in drop_cols]]
 
     st.dataframe(
