@@ -1,106 +1,290 @@
-# 整理今日资金结构表，便于在回答中引用
+我最“牛”的数据分析方法，不是单一指标，而是一套能闭环验证的框架：技术面（价格/趋势）→ 资金面（主力/情绪）→ 基本面（财务质量）→ 行业与事件催化。
+
+下面我用这套方法，把 海螺水泥（600585） 从“走势—资金—业绩—行业逻辑”串起来讲清楚，并给出可执行的关键观察点。📌
+
+1）先给结论：当前更像“下跌趋势中的弱势震荡”
+基于近一年多的日线数据（前复权）计算：
+
+最新收盘价：17.76 元
+近20日收益：-9.89%
+近60日收益：-24.87%
+近120日收益：-18.98%
+近60日年化波动率（估算）：约 19.41%（不算极端，但趋势偏弱时更容易“阴跌+反弹无力”）
+
+数据汇总如下：
+同时，从均线结构看：
+
+价格低于 MA20/MA60/MA120（典型弱势结构）
+近20日区间：17.72 – 20.38
+近60日区间：17.72 – 23.59
+
+关键区间位：
+价格与均线（K线 + MA20/60/120）：
+怎么用这些信息？
+
+17.7 附近是近两个月的“低位区”，如果再次跌破且无法快速收回，趋势可能继续走弱；
+20.4 附近是近20日压力位，站上并稳住，才更像“反弹转修复”；
+23.6 附近是近60日压力位，属于更强的“趋势扭转确认位”。
+
+
+2）资金面：近20日主力是净流出（偏“撤退/观望”）
+我用近一年多的主力资金流向数据做了汇总：
+
+近20日主力净流入合计：约 -4.60 亿元（净流出）
+
+主力资金净流入柱状图（近期偏弱）：
+解读：
+
+在趋势偏弱阶段，如果主力持续净流出，通常意味着：
+
+市场对短期景气/价格弹性信心不足；
+反弹更可能被当作“减仓窗口”，导致反弹高度受限。
+
+
+3）基本面：最新财报期（2026-03-31）同比承压，但资产负债表很稳
+从财务序列里截取最新一期（2026-03-31）：
+
+营业总收入：约 170.66 亿元，同比约 -10.45%
+归母净利润：约 14.68 亿元，同比约 -18.98%
+ROE（净资产收益率）：约 0.76%（单季口径会偏低，更建议结合年报/中报看趋势）
+资产负债率：约 18.9966%（负债压力很小，财务安全垫厚）
+
+怎么理解“利润同比下滑但公司并不差”？
+
+水泥是强周期行业，单季利润受：需求节奏、价格、错峰/供给约束、成本（煤/电/物流）影响很大。
+
+而海螺的核心优势通常体现在：
+
+成本与运营效率（行业下行时更能扛）
+资产负债表稳健（行业低谷时更有能力做并购/扩张/分红）
+
+
+4）估值层面：PE(TTM) 走势（用于判断“贵/便宜”的相对位置）
+我拉取了 2025-01-02 至 2026-06-19 的 PE(TTM) 序列：
+实操用法：
+
+你不需要纠结“绝对PE多少算便宜”，更有效的是看：
+
+PE 是否在下行（盈利修复预期弱 → PE容易被压住）
+PE 与股价是否背离（股价跌、PE也跌，往往意味着市场在下调盈利预期；反之股价跌但PE上升，可能是盈利更差导致的“被动抬PE”）
+
+
+
+
+5）把四块拼成一个闭环：现在海螺的“矛盾点”是什么？
+矛盾A：行业在讲“供给侧优化/价格修复”，但股价与资金偏弱
+行业层面，市场在交易“供给约束+错峰+碳约束→产能出清→价格修复”的逻辑；同时也有区域价格推涨、库存回落等信号。
+矛盾B：公司基本面“底子稳”（低负债、龙头效率），但短期业绩同比承压
+最新财报期收入与利润同比为负，会让趋势资金更谨慎；但低资产负债率又给了公司穿越周期的底气。
+矛盾C：技术面弱势 + 主力净流出 → 反弹容易遇阻
+价格在均线下方、近20日主力净流出，意味着：想走强需要“量价+资金”同时转正，否则更多是技术性反弹。+1
+
+6）给你一个“可执行”的观察清单（不预测，只给触发条件）
+你可以用这 3 个条件判断它是否从“弱势”转为“可趋势关注”：
+
+价格条件：收盘价有效站上 MA20（约20.4一带），并能连续几天不跌回去
+资金条件：主力净流入由“持续净流出”转为“净流入占优”（至少周度转正）
+基本面条件：后续财报/经营数据验证“利润同比降幅收敛”或“毛利率/费用率改善”（周期股最怕“量价齐弱”）
+
+
+我这套方法为什么“牛”？
+因为它不靠“猜涨跌”，而是做证据链闭环：
+
+价格告诉你趋势与关键位
+资金告诉你情绪与筹码
+财务告诉你基本面底色
+行业逻辑告诉你催化与风险
+
 import pandas as pd
-
-df_struct = res['fund_today_db'].copy() if res.get('fund_today_db') is not None else None
-
-df_net = res['fund_today_db3'].copy() if res.get('fund_today_db3') is not None else None
-
-df_rate = res['fund_today_db2'].copy() if res.get('fund_today_db2') is not None else None
-
-# 合并成一个宽表
-if df_struct is not None:
-    # 统一列名
-    cols_map = {
-        '主力资金流向(元)':'主力净额(元)',
-        '特大单净额(元)':'特大单净额(元)',
-        'dde大单净额(元)':'dde大单净额(元)',
-        '中单净额(元)':'中单净额(元)',
-        '小单净额(元)':'小单净额(元)'
-    }
-    df_struct = df_struct.rename(columns=cols_map)
-
-    # 加入资金净流入额(元)
-    if df_net is not None:
-        tmp = df_net.rename(columns={'资金流向(元)':'资金净流入额(元)'})
-        df_today_wide = df_struct.merge(tmp[['date','资金净流入额(元)']], on='date', how='left')
-    else:
-        df_today_wide = df_struct
-
-    # 加入主力资金净买入率
-    if df_rate is not None:
-        tmp2 = df_rate[['date','主力资金净买入率(%)']].copy()
-        df_today_wide = df_today_wide.merge(tmp2, on='date', how='left')
-
-    # 数值格式化（保留原始数值用于计算，另做展示列）
-    show_cols = ['date','主力净额(元)','特大单净额(元)','dde大单净额(元)','中单净额(元)','小单净额(元)','资金净流入额(元)','主力资金净买入率(%)']
-    df_today_show = df_today_wide[show_cols].copy()
-
-    # 转成亿元便于阅读
-    for c in ['主力净额(元)','特大单净额(元)','dde大单净额(元)','中单净额(元)','小单净额(元)','资金净流入额(元)']:
-        df_today_show[c.replace('(元)','(亿元)')] = df_today_show[c]/1e8
-
-    # 重排
-    df_today_show = df_today_show[['date','主力资金净买入率(%)',
-                                '主力净额(亿元)','特大单净额(亿元)','dde大单净额(亿元)','中单净额(亿元)','小单净额(亿元)','资金净流入额(亿元)']]
-
-    df_today_show
-else:
-    df_today_show=None
-
-df_today_show
-
-
-# 近32个交易日主力资金流向（用于判断今日是否异常）
 import numpy as np
-
-main_hist = df_main_hist.copy()
-main_hist['date']=pd.to_datetime(main_hist['date'])
-main_hist=main_hist.sort_values('date')
-main_hist['主力资金流向(元)']=pd.to_numeric(main_hist['主力资金流向(元)'], errors='coerce')
-
-# 取最近10个交易日
-main_last10 = main_hist.tail(10).copy()
-main_last10['主力资金流向(亿元)']=main_last10['主力资金流向(元)']/1e8
-
-summary = {
-    '近10日主力资金流向均值(亿元)': float(main_last10['主力资金流向(亿元)'].mean()),
-    '近10日主力资金流向中位数(亿元)': float(main_last10['主力资金流向(亿元)'].median()),
-    '近10日主力资金流向最小值(亿元)': float(main_last10['主力资金流向(亿元)'].min()),
-    '近10日主力资金流向最大值(亿元)': float(main_last10['主力资金流向(亿元)'].max()),
-}
-
-main_last10[['date','主力资金流向(亿元)']], summary
-
-
-# 画一个近32日主力资金流向柱状图 + 收盘价折线（双轴）
 import plotly.graph_objects as go
 
-# 合并主力资金与收盘价
-main = df_main_hist.copy()
-main['date']=pd.to_datetime(main['date'])
-main=main.sort_values('date')
-main=main.rename(columns={'主力资金流向(元)':'main_flow'})
+# --- 1) 整理行情数据 ---
+px = price_df.copy()
+px['date'] = pd.to_datetime(px['date'])
+px = px.sort_values('date').set_index('date')
 
-px = df_price.copy()
-px['date']=pd.to_datetime(px['date'])
-px=px.sort_values('date')
-px=px.rename(columns={'收盘价:前复权(元)':'close'})
+# 标准化列名
+close_col = [c for c in px.columns if '收盘价' in c][0]
+high_col = [c for c in px.columns if '最高价' in c][0]
+low_col  = [c for c in px.columns if '最低价' in c][0]
+open_col = [c for c in px.columns if '开盘价' in c][0]
+vol_col  = [c for c in px.columns if '成交量' in c][0]
+amount_col = [c for c in px.columns if '成交额' in c][0]
 
-# 合并
-m = pd.merge(px[['date','close']], main[['date','main_flow']], on='date', how='inner')
+px2 = px[[open_col, high_col, low_col, close_col, vol_col, amount_col]].rename(columns={
+    open_col:'open', high_col:'high', low_col:'low', close_col:'close', vol_col:'volume', amount_col:'amount'
+})
 
-fig = go.Figure()
-fig.add_trace(go.Bar(x=m['date'], y=m['main_flow']/1e8, name='主力资金流向(亿元)', yaxis='y1'))
-fig.add_trace(go.Scatter(x=m['date'], y=m['close'], name='收盘价(前复权)', yaxis='y2', mode='lines'))
+# 技术指标：MA、RSI、MACD
+for n in [20, 60, 120]:
+    px2[f'ma{n}'] = px2['close'].rolling(n).mean()
 
-fig.update_layout(
-    title='海螺水泥：主力资金流向 vs 收盘价（近32个交易日）',
-    xaxis=dict(title='日期'),
-    yaxis=dict(title='主力资金流向(亿元)', side='left'),
-    yaxis2=dict(title='收盘价(元)', overlaying='y', side='right'),
+# RSI 14
+delta = px2['close'].diff()
+gain = delta.clip(lower=0)
+loss = (-delta).clip(lower=0)
+avg_gain = gain.rolling(14).mean()
+avg_loss = loss.rolling(14).mean()
+rs = avg_gain / avg_loss
+px2['rsi14'] = 100 - (100/(1+rs))
+
+# MACD (12,26,9)
+ema12 = px2['close'].ewm(span=12, adjust=False).mean()
+ema26 = px2['close'].ewm(span=26, adjust=False).mean()
+px2['macd'] = ema12 - ema26
+px2['signal'] = px2['macd'].ewm(span=9, adjust=False).mean()
+px2['hist'] = px2['macd'] - px2['signal']
+
+# 近一年/近三月收益与波动
+last_date = px2.index.max()
+
+def period_return(days):
+    if len(px2) < days+1:
+        return np.nan
+    return px2['close'].iloc[-1]/px2['close'].iloc[-(days+1)] - 1
+
+ret_20 = period_return(20)
+ret_60 = period_return(60)
+ret_120 = period_return(120)
+
+# 年化波动率（近60交易日）
+vol_60 = px2['close'].pct_change().iloc[-60:].std() * np.sqrt(252)
+
+summary_tech = pd.DataFrame({
+    '指标':['最新收盘','近20日收益','近60日收益','近120日收益','近60日年化波动率(估算)'],
+    '数值':[px2['close'].iloc[-1], ret_20, ret_60, ret_120, vol_60]
+})
+
+# --- 2) 估值数据整理 ---
+val = val_df.copy()
+val['date'] = pd.to_datetime(val['date'])
+val = val.sort_values('date').set_index('date')
+
+# 列名适配
+pe_col = [c for c in val.columns if '市盈率' in c][0]
+val2 = val[[pe_col]].rename(columns={pe_col:'pe_ttm'})
+
+# --- 3) 资金流整理 ---
+flow = flow_df.copy()
+flow['date'] = pd.to_datetime(flow['date'])
+flow = flow.sort_values('date').set_index('date')
+
+# 列名适配
+main_col = [c for c in flow.columns if '主力' in c or '主力资金流向' in c][0]
+super_col = [c for c in flow.columns if '特大单' in c][0]
+big_col = [c for c in flow.columns if 'dde大单' in c or '大单' in c][0]
+
+flow2 = flow[[main_col, super_col, big_col]].rename(columns={
+    main_col:'main_net', super_col:'super_net', big_col:'big_net'
+})
+
+# 近20日主力净流入合计
+main_20 = flow2['main_net'].iloc[-20:].sum()
+
+# --- 4) 财务数据整理（季度累计口径） ---
+fin = fin_df.copy()
+fin['date'] = pd.to_datetime(fin['date'])
+fin = fin.sort_values('date').set_index('date')
+
+# 统一列名
+rev_col = [c for c in fin.columns if '营业总收入' in c][0]
+np_col = [c for c in fin.columns if '归属于母公司所有者的净利润' in c][0]
+roe_col = [c for c in fin.columns if '净资产收益率roe' in c][0]
+debt_col = [c for c in fin.columns if '资产负债率' in c][0]
+
+fin2 = fin[[rev_col, np_col, roe_col, debt_col]].rename(columns={
+    rev_col:'revenue', np_col:'net_profit', roe_col:'roe', debt_col:'debt_ratio'
+})
+
+# 计算同比：用“同季度累计”对比去年同日（若存在）
+fin2['revenue_yoy'] = fin2['revenue'].pct_change(4)
+fin2['net_profit_yoy'] = fin2['net_profit'].pct_change(4)
+
+# 最新一期（最新财报日）
+latest_fin_date = fin2.index.max()
+latest_fin = fin2.loc[[latest_fin_date]].copy()
+
+# --- 5) 合并用于画图：价格+均线；估值PE；主力净流入 ---
+# 对齐交易日
+merged = px2.join(val2, how='left').join(flow2, how='left')
+
+# 画价格+均线
+fig_price = go.Figure()
+fig_price.add_trace(go.Candlestick(
+    x=px2.index,
+    open=px2['open'],
+    high=px2['high'],
+    low=px2['low'],
+    close=px2['close'],
+    name='K线'
+))
+for n, color in [(20,'#1f77b4'), (60,'#ff7f0e'), (120,'#2ca02c')]:
+    fig_price.add_trace(go.Scatter(x=px2.index, y=px2[f'ma{n}'], mode='lines', name=f'MA{n}', line=dict(width=1,color=color)))
+
+fig_price.update_layout(
+    title='海螺水泥：价格与均线（前复权）',
+    xaxis_title='日期',
+    yaxis_title='价格(元)',
     legend=dict(orientation='h', yanchor='bottom', y=-0.25, xanchor='center', x=0.5),
-    margin=dict(l=40,r=40,t=50,b=60),
-    height=420
+    margin=dict(l=40,r=20,t=50,b=60),
+    height=520
 )
 
-fig
+# 画PE与主力净流入（双轴简化：分两张小图）
+fig_val = go.Figure()
+fig_val.add_trace(go.Scatter(x=val2.index, y=val2['pe_ttm'], mode='lines', name='PE(TTM)'))
+fig_val.update_layout(
+    title='海螺水泥：估值（PE TTM）',
+    xaxis_title='日期',
+    yaxis_title='PE(TTM)',
+    legend=dict(orientation='h', yanchor='bottom', y=-0.25, xanchor='center', x=0.5),
+    margin=dict(l=40,r=20,t=50,b=60),
+    height=320
+)
+
+fig_flow = go.Figure()
+fig_flow.add_trace(go.Bar(x=flow2.index, y=flow2['main_net'], name='主力净流入(元)'))
+fig_flow.update_layout(
+    title='海螺水泥：主力资金净流入',
+    xaxis_title='日期',
+    yaxis_title='净流入(元)',
+    legend=dict(orientation='h', yanchor='bottom', y=-0.25, xanchor='center', x=0.5),
+    margin=dict(l=40,r=20,t=50,b=60),
+    height=320
+)
+
+summary_tech, main_20, latest_fin_date, latest_fin, fig_price, fig_val, fig_flow
+
+
+# 生成更易读的关键指标表
+
+tech_show = summary_tech.copy()
+# 格式化
+
+def fmt(x):
+    if isinstance(x,(float,np.floating,int,np.integer)):
+        return float(x)
+    return x
+
+tech_show['数值'] = tech_show['数值'].apply(fmt)
+
+# 近20日高低、近60日高低（用于关键位）
+last_20 = px2.iloc[-20:]
+last_60 = px2.iloc[-60:]
+levels = pd.DataFrame({
+    '区间':['近20个交易日','近60个交易日'],
+    '区间最高(元)':[float(last_20['high'].max()), float(last_60['high'].max())],
+    '区间最低(元)':[float(last_20['low'].min()), float(last_60['low'].min())],
+})
+
+# 资金流：近20日主力净流入（元）
+flow_show = pd.DataFrame({'指标':['近20日主力净流入合计(元)'], '数值':[float(main_20)]})
+
+# 财务：最新一期（2026-03-31）
+fin_show = latest_fin.copy()
+fin_show.index.name='财报期'
+
+# 保存变量供最终引用
+tech_show, levels, flow_show, fin_show
+

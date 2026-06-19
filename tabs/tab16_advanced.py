@@ -1032,12 +1032,322 @@ def _render_fund_flow():
 
 
 # ══════════════════════════════════════════════════
+# Sub-tab 10: Integrated Stock Diagnostics
+# ══════════════════════════════════════════════════
+
+def _render_stock_diagnosis():
+    st.subheader("🔬 个股综合诊断")
+    st.caption("技术面 + 资金面 + 基本面 + 触发条件 — 四维闭环验证")
+
+    from data.technicals import compute_full_analysis
+    from data.fund_flow import get_fund_flow_summary, get_individual_fund_flow
+    from data.database import get_fund_flow_latest_date
+
+    col_a, col_b = st.columns([2, 3])
+    with col_a:
+        code = st.text_input("股票代码", value="600585", key="diag_code",
+                             placeholder="如 600585", max_chars=6).strip()
+    with col_b:
+        st.write("")
+        st.write("")
+        if st.button("🔍 开始诊断", use_container_width=True, key="diag_run"):
+            st.session_state["run_diag"] = True
+
+    if not code or len(code) < 6:
+        st.info("请输入6位股票代码，启动综合诊断")
+        return
+
+    if not st.session_state.get("run_diag") and f"_diag_{code}" not in st.session_state:
+        st.info("👆 点击「开始诊断」运行四维分析")
+        # Show quick entry for convenience
+        if st.button("🚀 快速诊断", key="diag_quick"):
+            st.session_state["run_diag"] = True
+            st.rerun()
+        return
+
+    # ── 检查缓存 ──
+    if st.session_state.get("run_diag") or f"_diag_{code}" not in st.session_state:
+        with st.spinner(f"正在对 {code} 进行四维诊断分析..."):
+            tech = compute_full_analysis(code)
+            ff_summary = get_fund_flow_summary(code, days=20)
+            ff_df = get_individual_fund_flow(code)
+        st.session_state[f"_diag_{code}"] = {
+            "tech": tech,
+            "ff_summary": ff_summary,
+            "ff_df": ff_df,
+        }
+        st.session_state["run_diag"] = False
+        st.session_state["symbol"] = code
+
+    diag = st.session_state[f"_diag_{code}"]
+    tech = diag.get("tech", {})
+    ff_summary = diag.get("ff_summary")
+    ff_df = diag.get("ff_df")
+
+    if tech.get("error"):
+        st.warning(tech["error"])
+        return
+
+    # ═══════════════════════════════
+    # Part A: 核心指标卡片
+    # ═══════════════════════════════
+    st.markdown("### 📊 技术面核心指标")
+    c1, c2, c3, c4, c5, c6 = st.columns(6)
+    with c1:
+        st.metric("最新收盘", f"{tech['close']:.2f}")
+    with c2:
+        st.metric("近20日收益", f"{tech.get('ret_20d', 0):+.2f}%")
+    with c3:
+        st.metric("近60日收益", f"{tech.get('ret_60d', 0):+.2f}%")
+    with c4:
+        st.metric("近120日收益", f"{tech.get('ret_120d', 0):+.2f}%")
+    with c5:
+        st.metric("60日年化波动", f"{tech.get('vol_60d_annual', 0):.1f}%")
+    with c6:
+        rsi = tech.get("rsi14", 50)
+        rsi_color = "normal" if 30 <= rsi <= 70 else "off"
+        st.metric("RSI(14)", f"{rsi:.1f}", delta="超卖" if rsi < 30 else ("超买" if rsi > 70 else None))
+
+    # ── MACD ──
+    st.caption(
+        f"MACD: {tech.get('macd', 0):.4f}  |  "
+        f"Signal: {tech.get('macd_signal', 0):.4f}  |  "
+        f"柱: {tech.get('macd_hist', 0):+.4f}  "
+        f"({'🟢 多头' if (tech.get('macd_hist', 0) or 0) > 0 else '🔴 空头'})"
+    )
+
+    # ── 均线结构 ──
+    st.divider()
+    st.markdown("### 📐 均线 & 关键位")
+    trend = tech.get("trend", {})
+    c_ma1, c_ma2, c_ma3 = st.columns(3)
+    for i, (n, col) in enumerate([(20, c_ma1), (60, c_ma2), (120, c_ma3)]):
+        ma_val = trend.get(f"ma{n}_val")
+        vs = trend.get(f"vs_ma{n}", "无数据")
+        with col:
+            color = "#26a69a" if vs == "上方" else "#ef5350"
+            ma_str = f"¥{ma_val:.2f}" if ma_val else "N/A"
+            st.metric(f"MA{n} ({ma_str})", f"价格在{vs}", delta_color="normal")
+
+    # 关键位
+    lv_cols = st.columns(2)
+    with lv_cols[0]:
+        st.caption(
+            f"**近20日区间**: {tech.get('level_20d_low', 0):.2f} – {tech.get('level_20d_high', 0):.2f}"
+        )
+    with lv_cols[1]:
+        st.caption(
+            f"**近60日区间**: {tech.get('level_60d_low', 0):.2f} – {tech.get('level_60d_high', 0):.2f}"
+        )
+
+    # ═══════════════════════════════
+    # Part B: 资金面
+    # ═══════════════════════════════
+    st.divider()
+    st.markdown("### 💰 资金面")
+
+    if ff_summary:
+        today_net = ff_summary["today_main_net_yi"]
+        ff_c1, ff_c2, ff_c3 = st.columns(3)
+        with ff_c1:
+            st.metric("今日净额", f"{today_net:+.4f}亿")
+        with ff_c2:
+            st.metric("近20日均值", f"{ff_summary['mean']:+.4f}亿")
+        with ff_c3:
+            # 计算近20日累计
+            recent_total = sum(d["main_net_yi"] for d in ff_summary.get("recent_days", []))
+            st.metric("近20日累计", f"{recent_total:+.2f}亿",
+                      delta="净流出" if recent_total < 0 else "净流入")
+    else:
+        st.caption("暂无资金流数据（需每日使用以积累历史）")
+
+    # ═══════════════════════════════
+    # Part C: 图表区
+    # ═══════════════════════════════
+    st.divider()
+
+    chart_t1, chart_t2 = st.tabs(["📈 K线+均线", "💹 资金流+MACD"])
+
+    with chart_t1:
+        df_tech = tech.get("df")
+        if df_tech is not None and not df_tech.empty:
+            recent = df_tech.tail(120)
+            fig_kl = go.Figure()
+            fig_kl.add_trace(go.Candlestick(
+                x=recent.index, open=recent["open"], high=recent["high"],
+                low=recent["low"], close=recent["close"], name="K线"
+            ))
+            for n, color in [(20, "#1f77b4"), (60, "#ff7f0e"), (120, "#2ca02c")]:
+                col_name = f"ma{n}"
+                if col_name in recent.columns:
+                    fig_kl.add_trace(go.Scatter(
+                        x=recent.index, y=recent[col_name],
+                        mode="lines", name=f"MA{n}",
+                        line=dict(width=1, color=color)
+                    ))
+            fig_kl.update_layout(
+                title="K线 + 均线 (MA20/60/120)", height=450,
+                xaxis_title="日期", yaxis_title="价格(元)",
+                legend=dict(orientation="h", yanchor="bottom", y=-0.3, xanchor="center", x=0.5),
+                margin=dict(l=40, r=20, t=50, b=70),
+            )
+            st.plotly_chart(fig_kl, use_container_width=True)
+
+    with chart_t2:
+        if df_tech is not None and not df_tech.empty:
+            recent = df_tech.tail(120)
+            fig_combo = make_subplots(
+                rows=2, cols=1, shared_xaxes=True,
+                row_heights=[0.5, 0.5],
+                vertical_spacing=0.08,
+            )
+
+            # 上: 资金流柱状图
+            if ff_df is not None and not ff_df.empty:
+                # align dates
+                ff_df_idx = ff_df.set_index("date") if "date" in ff_df.columns else ff_df.set_index("trade_date")
+                net_col = "main_net" if "main_net" in ff_df_idx.columns else "主力净额"
+                if net_col in ff_df_idx.columns:
+                    common = recent.index.intersection(ff_df_idx.index)
+                    if len(common) > 0:
+                        ff_aligned = ff_df_idx.loc[common]
+                        net_vals = ff_aligned[net_col] / 1e8
+                        colors = ["#ef5350" if v < 0 else "#26a69a" for v in net_vals]
+                        fig_combo.add_trace(
+                            go.Bar(x=ff_aligned.index, y=net_vals, name="净额(亿)",
+                                   marker_color=colors, opacity=0.85),
+                            row=1, col=1,
+                        )
+
+            fig_combo.update_yaxes(title_text="净额(亿元)", row=1, col=1)
+
+            # 下: MACD
+            if "macd" in recent.columns and "macd_signal" in recent.columns:
+                fig_combo.add_trace(
+                    go.Scatter(x=recent.index, y=recent["macd"], name="MACD",
+                               line=dict(color="#1f77b4", width=1.5)), row=2, col=1)
+                fig_combo.add_trace(
+                    go.Scatter(x=recent.index, y=recent["macd_signal"], name="Signal",
+                               line=dict(color="#ff7f0e", width=1)), row=2, col=1)
+                # hist as bar
+                hist_colors = ["#ef5350" if v < 0 else "#26a69a" for v in recent["macd_hist"].fillna(0)]
+                fig_combo.add_trace(
+                    go.Bar(x=recent.index, y=recent["macd_hist"], name="Hist",
+                           marker_color=hist_colors, opacity=0.6), row=2, col=1)
+
+            fig_combo.update_layout(
+                title="资金净额 + MACD", height=450,
+                hovermode="x unified",
+                legend=dict(orientation="h", yanchor="bottom", y=-0.25, xanchor="center", x=0.5),
+                margin=dict(l=40, r=20, t=50, b=70),
+            )
+            st.plotly_chart(fig_combo, use_container_width=True)
+
+    # ═══════════════════════════════
+    # Part D: 基本面快照（从 AKShare）
+    # ═══════════════════════════════
+    st.divider()
+    st.markdown("### 📋 基本面快照")
+
+    try:
+        from data.fetcher import _fetch_akshare_sina
+        import akshare as ak
+        fin_df = ak.stock_financial_abstract_ths(symbol=code, indicator="按报告期")
+        if fin_df is not None and not fin_df.empty:
+            latest = fin_df.iloc[-1]
+            latest_date = fin_df.index[-1] if hasattr(fin_df.index, '__getitem__') else "最新"
+
+            # 动态取列
+            fin_cols_map = {}
+            for c in fin_df.columns:
+                if "营业总收入" in c:
+                    fin_cols_map["营收"] = c
+                elif "净利润" in c and "归" in c:
+                    fin_cols_map["归母净利润"] = c
+                elif "净资产收益率" in c:
+                    fin_cols_map["ROE"] = c
+                elif "资产负债率" in c:
+                    fin_cols_map["负债率"] = c
+                elif "毛利率" in c:
+                    fin_cols_map["毛利率"] = c
+
+            if fin_cols_map:
+                fi_c1, fi_c2, fi_c3, fi_c4, fi_c5 = st.columns(5)
+                for i, (label, col_name) in enumerate(fin_cols_map.items()):
+                    val = latest[col_name]
+                    formatted = f"{float(val)/1e8:.2f}亿" if "收入" in label or "利润" in label else f"{float(val):.2f}%"
+                    with [fi_c1, fi_c2, fi_c3, fi_c4, fi_c5][i]:
+                        st.metric(label, formatted)
+            else:
+                st.caption("基本面数据列名不匹配，请升级 AKShare")
+        else:
+            st.caption("⚠️ 同花顺基本面接口返回空（可能非交易时段）")
+    except Exception as e:
+        st.caption(f"基本面数据获取失败: {str(e)[:60]}")
+
+    # ═══════════════════════════════
+    # Part E: 触发条件检查
+    # ═══════════════════════════════
+    st.divider()
+    st.markdown("### 🎯 可执行观察清单（触发条件）")
+
+    vs_ma20 = trend.get("vs_ma20", "无数据")
+    close = tech.get("close", 0)
+    ma20 = trend.get("ma20_val") or 0
+    ret_20 = tech.get("ret_20d") or 0
+    rsi = tech.get("rsi14") or 50
+    macd_hist = tech.get("macd_hist") or 0
+
+    # 条件1: 价格站上MA20
+    cond1 = vs_ma20 == "上方"
+    c1_icon = "✅" if cond1 else "❌"
+    c1_text = f"价格站上 MA20（约 ¥{ma20:.2f}）" if cond1 else f"价格跌破 MA20（约 ¥{ma20:.2f}），距 MA20 差 ¥{close - ma20:.2f}"
+
+    # 条件2: 资金面转正
+    recent_total = 0
+    if ff_summary:
+        recent_total = sum(d["main_net_yi"] for d in ff_summary.get("recent_days", []))
+    cond2 = recent_total > 0
+    c2_icon = "✅" if cond2 else "❌"
+    c2_text = f"近20日主力累计净流入 +{recent_total:.2f}亿" if cond2 else f"近20日主力累计净流出 {recent_total:.2f}亿"
+
+    # 条件3: 技术面改善
+    cond3 = ret_20 > -5 and macd_hist > -0.01 and rsi > 30
+    c3_icon = "✅" if cond3 else "⚠️"
+    c3_text = "近20日跌幅<5%, MACD未持续恶化, RSI>30" if cond3 else f"技术面偏弱：20日收益{ret_20:+.1f}%, MACD柱{macd_hist:+.4f}, RSI={rsi:.1f}"
+
+    # ── 综合判断 ──
+    met = sum([cond1, cond2, cond3])
+    if met == 3:
+        st.success(f"### {c1_icon} {c2_icon} {c3_icon}  综合评级: 🟢 可趋势关注")
+        st.caption("三个条件全部满足，技术面+资金面+动量共振向上。")
+    elif met >= 1:
+        st.warning(f"### {c1_icon} {c2_icon} {c3_icon}  综合评级: 🟡 继续观察")
+        st.caption(f"满足 {met}/3 个条件。需更多信号确认趋势转换。")
+    else:
+        st.error(f"### {c1_icon} {c2_icon} {c3_icon}  综合评级: 🔴 弱势 — 暂不建议")
+        st.caption("三个条件均不满足。价格弱势+资金流出+技术恶化，反弹多为减仓窗口。")
+
+    # 详细条件列表
+    st.markdown(f"""
+    | 条件 | 状态 | 说明 |
+    |------|:----:|------|
+    | ① 价格条件：收盘站上 MA20 | {c1_icon} | {c1_text} |
+    | ② 资金条件：主力净流入转正 | {c2_icon} | {c2_text} |
+    | ③ 技术条件：动量改善 | {c3_icon} | {c3_text} |
+    """)
+
+    st.caption("💡 方法论来源: 同花顺 AI 四维闭环分析框架（技术面→资金面→基本面→触发条件）")
+
+
+# ══════════════════════════════════════════════════
 
 def render():
     st.title("📊 高级分析")
-    st.caption("DuckDB 驱动 — 多因子 · 形态 · 异动 · 行业轮动 · 蜡烛 · 相关性 · 批量回测 · 量化信号 · 资金流向")
+    st.caption("DuckDB 驱动 — 综合诊断 · 多因子 · 形态 · 异动 · 行业轮动 · 蜡烛 · 相关性 · 批量回测 · 量化信号 · 资金流向")
 
-    sub1, sub2, sub3, sub4, sub5, sub6, sub7, sub8, sub9 = st.tabs([
+    sub1, sub2, sub3, sub4, sub5, sub6, sub7, sub8, sub9, sub10 = st.tabs([
+        "🔬 个股诊断",
         "🎯 多因子排名",
         "📐 形态扫描",
         "⚡ 异动检测",
@@ -1049,12 +1359,13 @@ def render():
         "💰 资金流向",
     ])
 
-    with sub1: _render_factor_ranking()
-    with sub2: _render_pattern_scanning()
-    with sub3: _render_anomaly_detection()
-    with sub4: _render_industry_rotation()
-    with sub5: _render_candlestick()
-    with sub6: _render_correlation()
-    with sub7: _render_batch_backtest()
-    with sub8: _render_quant_signals()
-    with sub9: _render_fund_flow()
+    with sub1: _render_stock_diagnosis()
+    with sub2: _render_factor_ranking()
+    with sub3: _render_pattern_scanning()
+    with sub4: _render_anomaly_detection()
+    with sub5: _render_industry_rotation()
+    with sub6: _render_candlestick()
+    with sub7: _render_correlation()
+    with sub8: _render_batch_backtest()
+    with sub9: _render_quant_signals()
+    with sub10: _render_fund_flow()
