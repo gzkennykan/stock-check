@@ -146,12 +146,12 @@ def _run_step6():
     ranking = compute_composite_ranking()
     if ranking.empty:
         return "多因子排名数据为空"
-    top_n = max(20, len(ranking) // 10)
+    top_n = max(20, len(ranking) // 100)
     top = ranking.head(top_n)
     st.session_state.wf_ranking = top
     for c in top["symbol"].head(top_n).values:
         st.session_state.wf_candidates.add(str(c).zfill(6))
-    return f"TOP {top_n} 只 (前10%)"
+    return f"TOP {top_n} 只 (前1%)"
 
 
 def _run_step7():
