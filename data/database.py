@@ -48,12 +48,34 @@ def _ensure_tables(conn) -> None:
             updated_at  TIMESTAMP     DEFAULT CURRENT_TIMESTAMP
         )
     """)
+    # 每日资金流向快照（同花顺源，日积月累）
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS fund_flow_daily (
+            symbol          VARCHAR(10)   NOT NULL,
+            trade_date      DATE          NOT NULL,
+            price           DOUBLE,
+            pct_change      DOUBLE,
+            turnover_rate   DOUBLE,
+            capital_inflow  DOUBLE,        -- 流入资金(元)
+            capital_outflow DOUBLE,        -- 流出资金(元)
+            main_net        DOUBLE,        -- 净额(元)
+            turnover        DOUBLE,        -- 成交额(元)
+            updated_at      TIMESTAMP     DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (symbol, trade_date)
+        )
+    """)
     # 为常见查询建立索引
     conn.execute("""
         CREATE INDEX IF NOT EXISTS idx_kline_symbol ON daily_kline(symbol)
     """)
     conn.execute("""
         CREATE INDEX IF NOT EXISTS idx_kline_date ON daily_kline(trade_date)
+    """)
+    conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_ff_symbol ON fund_flow_daily(symbol)
+    """)
+    conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_ff_date ON fund_flow_daily(trade_date)
     """)
 
 
@@ -171,7 +193,119 @@ def delete_kline(symbol: str, before_date: str = None) -> int:
         conn.close()
 
 
-# ────────────────────────── 板块管理 ──────────────────────────
+# ────────────────────────── 资金流向快照 ──────────────────────────
+
+def insert_fund_flow_snapshot(df: pd.DataFrame, trade_date: str = None) -> int:
+    """将每日资金流向快照写入 fund_flow_daily 表（upsert）。"""
+    if df is None or df.empty:
+        return 0
+    conn = get_connection()
+    try:
+        _ensure_tables(conn)
+        w = df.copy()
+        w = w.rename(columns={
+            "code": "symbol",
+            "main_capital": "main_net",
+        })
+        if trade_date:
+            w["trade_date"] = trade_date
+        elif "trade_date" not in w.columns:
+            w["trade_date"] = datetime.now().strftime("%Y-%m-%d")
+        # Keep only needed columns
+        needed = ["symbol", "trade_date", "price", "pct_change",
+                   "turnover_rate", "capital_inflow", "capital_outflow",
+                   "main_net", "turnover"]
+        for c in needed:
+            if c not in w.columns:
+                w[c] = 0
+        w = w[needed]
+        w["updated_at"] = datetime.now()
+
+        conn.execute("BEGIN")
+        conn.execute("""
+            INSERT OR REPLACE INTO fund_flow_daily
+                (symbol, trade_date, price, pct_change, turnover_rate,
+                 capital_inflow, capital_outflow, main_net, turnover, updated_at)
+            SELECT symbol, trade_date::DATE, price, pct_change, turnover_rate,
+                   capital_inflow, capital_outflow, main_net, turnover, updated_at
+            FROM w
+        """)
+        conn.execute("COMMIT")
+        return len(w)
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
+    finally:
+        conn.close()
+
+
+def get_fund_flow_history(symbol: str, limit: int = 120) -> pd.DataFrame:
+    """
+    读取单只股票的历史资金流向数据。
+    返回: [trade_date, price, pct_change, turnover_rate,
+            capital_inflow, capital_outflow, main_net, turnover]
+    """
+    conn = get_connection(read_only=True)
+    try:
+        df = conn.execute("""
+            SELECT trade_date, price, pct_change, turnover_rate,
+                   capital_inflow, capital_outflow, main_net, turnover
+            FROM fund_flow_daily
+            WHERE symbol = ?
+            ORDER BY trade_date DESC
+            LIMIT ?
+        """, [symbol, limit]).df()
+        if not df.empty:
+            df["trade_date"] = pd.to_datetime(df["trade_date"])
+            df = df.sort_values("trade_date")
+        return df
+    finally:
+        conn.close()
+
+
+def get_fund_flow_latest_date() -> str | None:
+    """获取资金流向表中的最新日期"""
+    conn = get_connection(read_only=True)
+    try:
+        r = conn.execute("SELECT MAX(trade_date) FROM fund_flow_daily").fetchone()
+        return str(r[0]) if r and r[0] else None
+    finally:
+        conn.close()
+
+
+def get_fund_flow_ranking(date: str = None, sort_by: str = "main_net",
+                           ascending: bool = False, limit: int = 50) -> pd.DataFrame:
+    """
+    获取资金流向排名。date=None 取最新日期。
+    sort_by: main_net / capital_inflow / turnover
+    """
+    conn = get_connection(read_only=True)
+    try:
+        if date is None:
+            date = get_fund_flow_latest_date()
+        if date is None:
+            return pd.DataFrame()
+        order_dir = "ASC" if ascending else "DESC"
+        col = sort_by if sort_by in ("main_net", "capital_inflow", "turnover") else "main_net"
+        df = conn.execute(f"""
+            SELECT symbol, price, pct_change, turnover_rate,
+                   capital_inflow, capital_outflow, main_net, turnover
+            FROM fund_flow_daily
+            WHERE trade_date = ?
+            ORDER BY {col} {order_dir}
+            LIMIT ?
+        """, [date, limit]).df()
+        # 补齐名称
+        try:
+            names = get_stock_name_map()
+            df["name"] = df["symbol"].map(names).fillna("")
+        except Exception:
+            df["name"] = ""
+        return df
+    finally:
+        conn.close()
+
+
 
 _TARGET_PREFIXES = ("60", "00", "30", "688")
 

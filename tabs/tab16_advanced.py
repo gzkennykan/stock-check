@@ -849,9 +849,14 @@ def _render_quant_signals():
 
 def _render_fund_flow():
     st.subheader("💰 个股资金流向分析")
-    st.caption("东方财富数据 — 按订单大小分层（超大单/大单/中单/小单），主力 = 超大单 + 大单")
+    st.caption("同花顺数据 → 本地 DuckDB 快照（每次启动自动抓取当日全市场排名，日积月累形成历史）")
 
     from data.fund_flow import get_individual_fund_flow, get_fund_flow_summary
+    from data.database import get_fund_flow_latest_date
+
+    latest_snapshot = get_fund_flow_latest_date()
+    if latest_snapshot:
+        st.caption(f"📸 最新快照日期: {latest_snapshot}")
 
     col_a, col_b, col_c = st.columns([2, 2, 2])
     with col_a:
@@ -865,28 +870,43 @@ def _render_fund_flow():
         refresh = st.button("🔄 查询", use_container_width=True, key="ff_refresh")
 
     if not code or len(code) < 6:
-        st.info("请输入6位股票代码查询个股资金流向（数据源: 东方财富）")
+        st.info("请输入6位股票代码查询个股资金流向（数据源: 同花顺）")
         return
 
     if not refresh and f"_ff_data_{code}" in st.session_state:
         df = st.session_state[f"_ff_data_{code}"]
         summary = st.session_state.get(f"_ff_summary_{code}")
     else:
-        with st.spinner(f"获取 {code} 资金流向数据..."):
+        with st.spinner(f"从本地数据库读取 {code} 资金流向历史..."):
             df = get_individual_fund_flow(code, force_refresh=refresh)
-            summary = get_fund_flow_summary(code, days=days)
+            if df is not None and not df.empty:
+                summary = get_fund_flow_summary(code, days=days)
+            else:
+                summary = None
         st.session_state[f"_ff_data_{code}"] = df
         st.session_state[f"_ff_summary_{code}"] = summary
-        # 也存到 symbols session
         st.session_state["symbol"] = code
 
     if df is None or df.empty:
-        st.warning(f"无法获取 {code} 的资金流向数据。东方财富接口可能暂时不可用，请稍后重试。"
-                   f"\n\n💡 提示：可尝试更换网络环境或稍后再试。")
+        st.warning(
+            f"📭 本地数据库中暂无 {code} 的资金流数据。"
+            f"\n\n**原因**: 资金流历史通过每日自动快照积累。"
+            f"\n- 如果今天是第一次使用此功能，数据从今天开始记录。"
+            f"\n- 东方财富 API 已不可用，改用同花顺源本地缓存。"
+            f"\n- 历史越长分析越有价值，请持续使用。"
+        )
         return
 
-    # ── Part A: 近10日统计摘要 ──
-    st.markdown("### 📊 近{}日主力资金统计".format(days))
+    # ── DB 列适配：统一命名 ──
+    if "main_net" in df.columns and "主力净额" not in df.columns:
+        df["主力净额"] = df["main_net"]
+    if "price" in df.columns and "close" not in df.columns:
+        df["close"] = df["price"]
+    if "date" not in df.columns and "trade_date" in df.columns:
+        df["date"] = df["trade_date"]
+
+    # ── Part A: 统计摘要 ──
+    st.markdown("### 📊 近{}日资金流统计".format(days))
 
     if summary:
         c1, c2, c3, c4, c5, c6 = st.columns(6)
@@ -895,7 +915,7 @@ def _render_fund_flow():
             st.metric("最新收盘", f"{summary['close']:.2f}",
                       delta=f"{summary['pct_change']:+.2f}%")
         with c2:
-            st.metric("今日主力净额", f"{today_net:+.4f}亿")
+            st.metric("今日净额", f"{today_net:+.4f}亿")
         with c3:
             st.metric("均值", f"{summary['mean']:+.4f}亿")
         with c4:
@@ -906,37 +926,46 @@ def _render_fund_flow():
             st.metric("最大值", f"{summary['max']:+.4f}亿")
 
         # 判断今日 vs 历史
-        if abs(today_net) > 0:
-            avg = summary['mean']
-            if avg != 0:
-                ratio = abs(today_net / avg) if avg != 0 else 0
-                if ratio > 2:
-                    direction = "流入" if today_net > 0 else "流出"
-                    st.warning(f"⚠️ 今日主力资金{direction}异常：为近{days}日均值的 {ratio:.1f} 倍")
+        if abs(today_net) > 0 and abs(summary['mean']) > 0.001:
+            ratio = abs(today_net / summary['mean']) if summary['mean'] != 0 else 0
+            if ratio > 2:
+                direction = "流入" if today_net > 0 else "流出"
+                st.warning(f"⚠️ 今日资金{direction}异常：为近{days}日均值的 {ratio:.1f} 倍")
 
-    # ── Part B: 最近N日明细表 ──
+    # ── Part B: 明细表 ──
     st.divider()
     st.markdown("### 📋 近{}日资金流明细".format(days))
 
     recent = df.tail(days).copy()
     if not recent.empty:
-        tbl = recent[["date", "close", "pct_change",
-                       "主力净额", "超大单净额", "大单净额",
-                       "中单净额", "小单净额"]].copy()
+        tbl_cols = ["date", "close", "pct_change", "主力净额"]
+        if "capital_inflow" in recent.columns:
+            tbl_cols.append("capital_inflow")
+        if "capital_outflow" in recent.columns:
+            tbl_cols.append("capital_outflow")
+        if "turnover" in recent.columns:
+            tbl_cols.append("turnover")
+        if "turnover_rate" in recent.columns:
+            tbl_cols.append("turnover_rate")
+        tbl_cols = [c for c in tbl_cols if c in recent.columns]
+        tbl = recent[tbl_cols].copy()
         tbl = tbl.sort_values("date", ascending=False)
 
-        for c in ["主力净额", "超大单净额", "大单净额", "中单净额", "小单净额"]:
+        for c in ["主力净额", "capital_inflow", "capital_outflow", "turnover"]:
             if c in tbl.columns:
                 tbl[c] = (tbl[c] / 1e8).round(4)
 
         tbl["date"] = tbl["date"].dt.strftime("%m/%d")
         tbl["close"] = tbl["close"].round(2)
         tbl["pct_change"] = tbl["pct_change"].round(2)
+        if "turnover_rate" in tbl.columns:
+            tbl["turnover_rate"] = tbl["turnover_rate"].round(2)
 
         tbl = tbl.rename(columns={
             "date": "日期", "close": "收盘价", "pct_change": "涨跌幅(%)",
-            "主力净额": "主力(亿)", "超大单净额": "超大单(亿)",
-            "大单净额": "大单(亿)", "中单净额": "中单(亿)", "小单净额": "小单(亿)",
+            "主力净额": "净额(亿)", "capital_inflow": "流入(亿)",
+            "capital_outflow": "流出(亿)", "turnover": "成交额(亿)",
+            "turnover_rate": "换手率(%)",
         })
 
         st.dataframe(
@@ -946,70 +975,33 @@ def _render_fund_flow():
             },
         )
 
-    # ── Part C: 今日四档订单结构 ──
+    # ── Part C: 资金流 vs 收盘价 双轴图 ──
     st.divider()
-    st.markdown("### 🔬 最近交易日订单结构")
-
-    latest = df.iloc[-1]
-    tiers = ["超大单", "大单", "中单", "小单"]
-    net_vals = []
-    pct_vals = []
-    for t in tiers:
-        nc = f"{t}净额"
-        pc = f"{t}净占比"
-        net_vals.append(float(latest.get(nc, 0) or 0) / 1e8)
-        pct_vals.append(float(latest.get(pc, 0) or 0))
-
-    c_left, c_right = st.columns([1, 1])
-    with c_left:
-        colors_net = ["#ef5350" if v < 0 else "#26a69a" for v in net_vals]
-        fig_net = go.Figure(go.Bar(
-            x=tiers, y=net_vals, marker_color=colors_net,
-            text=[f"{v:+.2f}亿" for v in net_vals],
-            textposition="outside",
-        ))
-        fig_net.update_layout(
-            title="各档净额（亿元）", height=350,
-            yaxis_title="亿元",
-        )
-        st.plotly_chart(fig_net, use_container_width=True)
-
-    with c_right:
-        colors_pct = ["#ef5350" if v < 0 else "#26a69a" for v in pct_vals]
-        fig_pct = go.Figure(go.Bar(
-            x=tiers, y=pct_vals, marker_color=colors_pct,
-            text=[f"{v:+.1f}%" for v in pct_vals],
-            textposition="outside",
-        ))
-        fig_pct.update_layout(
-            title="各档净占比（%）", height=350,
-            yaxis_title="%",
-        )
-        st.plotly_chart(fig_pct, use_container_width=True)
-
-    # ── Part D: 主力资金 vs 收盘价 双轴图 ──
-    st.divider()
-    st.markdown("### 📈 主力资金流向 vs 收盘价（近32日）")
+    st.markdown("### 📈 资金净额 vs 收盘价（近32日）")
 
     chart_data = df.tail(32).copy()
     if not chart_data.empty:
+        net_col = "主力净额"
+        close_col = "close"
+        if net_col not in chart_data.columns:
+            net_col = "main_net"
+
         fig = make_subplots(specs=[[{"secondary_y": True}]])
 
-        # 柱状图: 主力资金
-        colors = ["#ef5350" if v < 0 else "#26a69a" for v in chart_data["主力净额"] / 1e8]
+        net_vals = chart_data[net_col] / 1e8
+        colors = ["#ef5350" if v < 0 else "#26a69a" for v in net_vals]
         fig.add_trace(
             go.Bar(
-                x=chart_data["date"], y=chart_data["主力净额"] / 1e8,
-                name="主力资金(亿)", marker_color=colors,
+                x=chart_data["date"], y=net_vals,
+                name="资金净额(亿)", marker_color=colors,
                 opacity=0.85,
             ),
             secondary_y=False,
         )
 
-        # 折线: 收盘价
         fig.add_trace(
             go.Scatter(
-                x=chart_data["date"], y=chart_data["close"],
+                x=chart_data["date"], y=chart_data[close_col],
                 name="收盘价(元)", mode="lines+markers",
                 line=dict(color="#2196F3", width=2),
                 marker=dict(size=4),
@@ -1018,25 +1010,25 @@ def _render_fund_flow():
         )
 
         fig.update_layout(
-            title="主力资金流向 vs 收盘价",
+            title="资金净额 vs 收盘价",
             hovermode="x unified",
             height=420,
             legend=dict(orientation="h", yanchor="bottom", y=-0.25, xanchor="center", x=0.5),
             margin=dict(l=40, r=40, t=50, b=60),
         )
-        fig.update_yaxes(title_text="主力资金(亿元)", secondary_y=False)
+        fig.update_yaxes(title_text="资金净额(亿元)", secondary_y=False)
         fig.update_yaxes(title_text="收盘价(元)", secondary_y=True)
 
         st.plotly_chart(fig, use_container_width=True)
 
         # 辅助判断
         last_5 = chart_data.tail(5)
-        price_up = last_5["close"].iloc[-1] > last_5["close"].iloc[0]
-        fund_in = last_5["主力净额"].sum()
+        price_up = last_5[close_col].iloc[-1] > last_5[close_col].iloc[0]
+        fund_in = last_5[net_col].sum()
         if price_up and fund_in < 0:
-            st.warning("⚠️ 近5日：股价上涨但主力净流出 → 量价背离，注意风险")
+            st.warning("⚠️ 近5日：股价上涨但资金净流出 → 量价背离，注意风险")
         elif not price_up and fund_in > 0:
-            st.info("💡 近5日：股价下跌但主力净流入 → 可能为主力吸筹")
+            st.info("💡 近5日：股价下跌但资金净流入 → 可能为吸筹")
 
 
 # ══════════════════════════════════════════════════

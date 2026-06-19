@@ -1,140 +1,134 @@
 """
-个股资金流向模块：东方财富 (East Money) 按订单大小分层的资金流
+个股资金流向模块：本地 DuckDB 历史快照
 
-数据源: 东方财富 → AKShare stock_individual_fund_flow()
-提供: 近120日 超大单/大单/中单/小单 净额 & 净占比
-     主力净额 = 超大单 + 大单
+数据源: 同花顺 (10jqka) → AKShare stock_fund_flow_individual()
+策略: 每次打开程序自动抓取当日全市场排名快照存入 DuckDB fund_flow_daily 表，
+       日积月累形成个股历史资金流档案。
+
+优势: 离线可用，不依赖东方财富（已被封），历史越长分析越有价值。
 """
 import numpy as np
 import pandas as pd
+from datetime import datetime
 from pathlib import Path
-from datetime import datetime, timedelta
+
 from utils import retry
-
-_CACHE_DIR = Path(__file__).parent.parent / "data_cache"
-_CACHE_TTL_HOURS = 2  # 个股资金流缓存2小时
-
-
-def _norm_symbol(symbol: str) -> tuple[str, str]:
-    """标准化股票代码 → (market, code)"""
-    s = str(symbol).strip().zfill(6)
-    if s.startswith(("6", "5", "9")):
-        return "sh", s
-    elif s.startswith(("0", "3", "2")):
-        return "sz", s
-    elif s.startswith(("8", "4")):
-        return "bj", s
-    return "sh", s
+from data.database import (
+    insert_fund_flow_snapshot, get_fund_flow_history,
+    get_fund_flow_latest_date,
+)
 
 
-@retry(times=2, delay=1.0)
-def _fetch_from_eastmoney(symbol: str, market: str) -> pd.DataFrame | None:
-    """从东方财富获取个股资金流（120个交易日）"""
+@retry(times=2, delay=2.0)
+def _fetch_daily_ranking_from_10jqka() -> pd.DataFrame:
+    """
+    从同花顺获取当日全市场资金流向排名（约 5200 只股票）。
+    返回 DataFrame: [code, name, price, pct_change, turnover_rate,
+                      capital_inflow, capital_outflow, main_capital, turnover]
+    """
     import akshare as ak
     try:
-        df = ak.stock_individual_fund_flow(stock=symbol, market=market)
-    except Exception:
-        return None
-    if df is None or df.empty:
-        return None
+        raw = ak.stock_fund_flow_individual()
+    except Exception as e:
+        raise RuntimeError(f"同花顺资金流接口调用失败: {e}")
+
+    if raw is None or raw.empty:
+        raise RuntimeError("同花顺返回空数据")
+
+    raw.columns = [
+        "rank", "code", "name", "price", "pct_change_str", "turnover_rate_str",
+        "capital_inflow_str", "capital_outflow_str", "main_capital_str", "turnover_str"
+    ]
+
+    df = raw.copy()
+    df = df.drop(columns=["rank"])
+    df["code"] = df["code"].astype(str).str.strip().str.zfill(6)
+
+    # 数值清洗
+    df["price"] = pd.to_numeric(df["price"], errors="coerce")
+    df["pct_change"] = df["pct_change_str"].astype(str).str.replace("%", "", regex=False)
+    df["pct_change"] = pd.to_numeric(df["pct_change"], errors="coerce")
+    df["turnover_rate"] = df["turnover_rate_str"].astype(str).str.replace("%", "", regex=False)
+    df["turnover_rate"] = pd.to_numeric(df["turnover_rate"], errors="coerce")
+
+    # 资金列（带"亿"/"万"单位）
+    from data.screener import _parse_cn_money
+    for src, dst in [
+        ("capital_inflow_str", "capital_inflow"),
+        ("capital_outflow_str", "capital_outflow"),
+        ("main_capital_str", "main_capital"),
+        ("turnover_str", "turnover"),
+    ]:
+        df[dst] = df[src].apply(_parse_cn_money)
+
+    df = df.drop(columns=["pct_change_str", "turnover_rate_str",
+                           "capital_inflow_str", "capital_outflow_str",
+                           "main_capital_str", "turnover_str"], errors="ignore")
     return df
+
+
+def sync_fund_flow_snapshot(force: bool = False) -> dict:
+    """
+    同步当日全市场资金流快照到 DuckDB。
+    同一天只同步一次（force=True 强制覆盖）。
+
+    返回: {"status": "ok"/"error"/"skipped", "count": N, "date": "...", "message": ""}
+    """
+    today = datetime.now().strftime("%Y-%m-%d")
+
+    # 检查今天是否已有数据
+    if not force:
+        latest = get_fund_flow_latest_date()
+        if latest and latest >= today:
+            return {"status": "skipped", "count": 0, "date": latest,
+                     "message": f"今日({today})已有快照"}
+
+    try:
+        df = _fetch_daily_ranking_from_10jqka()
+    except Exception as e:
+        return {"status": "error", "count": 0, "date": today,
+                "message": str(e)}
+
+    if df.empty:
+        return {"status": "error", "count": 0, "date": today,
+                "message": "同花顺返回空数据"}
+
+    try:
+        n = insert_fund_flow_snapshot(df, trade_date=today)
+    except Exception as e:
+        return {"status": "error", "count": 0, "date": today,
+                "message": f"写入DB失败: {e}"}
+
+    return {"status": "ok", "count": n, "date": today,
+            "message": f"已保存 {n} 只股票资金流快照"}
 
 
 def get_individual_fund_flow(symbol: str, force_refresh: bool = False) -> pd.DataFrame | None:
     """
-    获取个股资金流明细（近120日）。
+    从本地 DuckDB 读取个股资金流历史（最多 120 个交易日）。
 
-    返回 DataFrame 列:
-        date, close, pct_change,
-        主力净额, 主力净占比,           ← 超大单 + 大单
-        超大单净额, 超大单净占比,
-        大单净额, 大单净占比,
-        中单净额, 中单净占比,
-        小单净额, 小单净占比
+    返回列:
+        date, price, pct_change, turnover_rate,
+        main_net (净额), capital_inflow, capital_outflow, turnover
     """
-    market, code = _norm_symbol(symbol)
+    # 确保今日快照存在
+    if force_refresh:
+        try:
+            sync_fund_flow_snapshot(force=True)
+        except Exception:
+            pass
 
-    # 缓存
-    cache_file = _CACHE_DIR / f"_ff_{code}.csv"
-    _CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    if not force_refresh and cache_file.exists():
-        age = (datetime.now() - datetime.fromtimestamp(cache_file.stat().st_mtime))
-        if age < timedelta(hours=_CACHE_TTL_HOURS):
-            df = pd.read_csv(cache_file)
-            if not df.empty:
-                df["date"] = pd.to_datetime(df["date"])
-                return df
-
-    raw = _fetch_from_eastmoney(symbol, market)
-    if raw is None:
-        # 尝试从缓存返回旧数据
-        if cache_file.exists():
-            df = pd.read_csv(cache_file)
-            if not df.empty:
-                df["date"] = pd.to_datetime(df["date"])
-                return df
+    s = str(symbol).strip().zfill(6)
+    df = get_fund_flow_history(s, limit=120)
+    if df is None or df.empty:
         return None
-
-    # ── 列名映射 ──
-    # AKShare 返回的列名（中文）
-    col_map = {
-        "日期": "date",
-        "收盘价": "close",
-        "涨跌幅": "pct_change",
-        "超大单净流入-净额": "超大单净额",
-        "超大单净流入-净占比": "超大单净占比",
-        "大单净流入-净额": "大单净额",
-        "大单净流入-净占比": "大单净占比",
-        "中单净流入-净额": "中单净额",
-        "中单净流入-净占比": "中单净占比",
-        "小单净流入-净额": "小单净额",
-        "小单净流入-净占比": "小单净占比",
-    }
-
-    df = raw.copy()
-    df = df.rename(columns=col_map)
-
-    # 类型转换
-    df["date"] = pd.to_datetime(df["date"])
-    for c in ["close", "pct_change", "超大单净额", "大单净额", "中单净额", "小单净额"]:
-        if c in df.columns:
-            df[c] = pd.to_numeric(df[c], errors="coerce")
-    for c in ["超大单净占比", "大单净占比", "中单净占比", "小单净占比"]:
-        if c in df.columns:
-            df[c] = pd.to_numeric(df[c], errors="coerce")
-
-    # 计算主力 = 超大单 + 大单
-    super_large = df.get("超大单净额", pd.Series(0, index=df.index)).fillna(0)
-    large = df.get("大单净额", pd.Series(0, index=df.index)).fillna(0)
-    df["主力净额"] = super_large + large
-
-    # 主力净占比
-    total_abs = (
-        super_large.abs() + large.abs() +
-        df.get("中单净额", pd.Series(0, index=df.index)).fillna(0).abs() +
-        df.get("小单净额", pd.Series(0, index=df.index)).fillna(0).abs()
-    )
-    df["主力净占比"] = np.where(total_abs > 0, (df["主力净额"] / total_abs * 100).round(2), 0)
-
-    df = df.sort_values("date").reset_index(drop=True)
-
-    # 只保留需要的列
-    keep = ["date", "close", "pct_change",
-            "主力净额", "主力净占比",
-            "超大单净额", "超大单净占比",
-            "大单净额", "大单净占比",
-            "中单净额", "中单净占比",
-            "小单净额", "小单净占比"]
-    df = df[[c for c in keep if c in df.columns]]
-
-    # 写缓存
-    df.to_csv(cache_file, index=False)
+    df = df.rename(columns={"trade_date": "date"})
     return df
 
 
 def get_fund_flow_summary(symbol: str, days: int = 10) -> dict | None:
     """
-    获取个股资金流统计摘要（近 N 日）。
+    从本地 DuckDB 读取个股资金流统计摘要。
 
     返回:
         { "latest_date", "close", "pct_change",
@@ -147,25 +141,26 @@ def get_fund_flow_summary(symbol: str, days: int = 10) -> dict | None:
         return None
 
     recent = df.tail(days).copy()
-    main_net = recent["主力净额"].dropna()
+    if "main_net" not in recent.columns:
+        return None
 
+    main_net = recent["main_net"].dropna()
     if main_net.empty:
         return None
 
     latest = recent.iloc[-1]
 
-    # 最近10日明细
     recent_list = []
     for _, r in recent.iterrows():
         recent_list.append({
-            "date": r["date"].strftime("%Y-%m-%d") if pd.notna(r["date"]) else "",
-            "main_net_yi": round(float(r["主力净额"]) / 1e8, 4) if pd.notna(r.get("主力净额")) else 0,
-            "close": round(float(r["close"]), 2) if pd.notna(r.get("close")) else 0,
+            "date": str(r["date"])[:10] if pd.notna(r["date"]) else "",
+            "main_net_yi": round(float(r["main_net"]) / 1e8, 4) if pd.notna(r.get("main_net")) else 0,
+            "close": round(float(r.get("price", 0)), 2) if pd.notna(r.get("price")) else 0,
         })
 
     return {
-        "latest_date": latest["date"].strftime("%Y-%m-%d") if pd.notna(latest["date"]) else "",
-        "close": round(float(latest.get("close", 0)), 2),
+        "latest_date": str(latest["date"])[:10] if pd.notna(latest["date"]) else "",
+        "close": round(float(latest.get("price", 0)), 2),
         "pct_change": round(float(latest.get("pct_change", 0)), 2),
         "today_main_net": float(main_net.iloc[-1]) if len(main_net) > 0 else 0,
         "today_main_net_yi": round(float(main_net.iloc[-1]) / 1e8, 4) if len(main_net) > 0 else 0,

@@ -1,5 +1,6 @@
 """Tab 5: 资金排名 — 主力流入/流出/成交额 TOP50 三合一"""
 import streamlit as st
+import pandas as pd
 from data.screener import get_fund_flow_data, get_stock_list, get_top_turnover
 from utils import fmt_yuan
 
@@ -8,6 +9,22 @@ VIEWS = {
     "outflow": {"title": "资金净流出 TOP50", "source": "同花顺"},
     "turnover": {"title": "成交额 TOP50", "source": "新浪行情"},
 }
+
+
+def _get_fund_flow_fast():
+    """
+    优先从本地 DuckDB 快照读取资金流排名（秒级），
+    若快照不存在则 fallback 到在线抓取同花顺（30-60秒）。
+    """
+    from data.database import get_fund_flow_ranking, get_fund_flow_latest_date
+    latest = get_fund_flow_latest_date()
+    if latest:
+        df = get_fund_flow_ranking(date=latest, sort_by="main_net", limit=6000)
+        if not df.empty:
+            # 适配 tab5 期望的列名
+            df = df.rename(columns={"symbol": "code", "main_net": "main_capital"})
+            return df
+    return None
 
 
 def render():

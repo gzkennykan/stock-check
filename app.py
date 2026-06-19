@@ -76,7 +76,25 @@ def _startup_tdx_sync():
         }
 
 
+def _startup_fund_flow_sync():
+    """
+    启动时自动抓取当日全市场资金流快照（同花顺源）。
+    每个浏览器会话仅执行一次，约 8 秒（104页分页抓取）。
+    """
+    if "_ff_startup_sync_done" in st.session_state:
+        return
+    st.session_state._ff_startup_sync_done = True
+
+    from data.fund_flow import sync_fund_flow_snapshot
+    try:
+        result = sync_fund_flow_snapshot()
+        st.session_state._ff_startup_result = result
+    except Exception as e:
+        st.session_state._ff_startup_result = {"status": "error", "message": str(e)}
+
+
 _startup_tdx_sync()
+_startup_fund_flow_sync()
 
 
 STRATEGY_MAP = {
@@ -194,7 +212,7 @@ if st.session_state.work_mode == "回测":
         st.session_state["run_backtest"] = True
 
     st.sidebar.markdown("---")
-    # 数据源状态：优先显示 TDX 本地同步结果
+    # 数据源状态：TDX 本地 + 资金流快照
     sync_result = st.session_state.get("_tdx_startup_result", {})
     if sync_result.get("status") == "ok":
         st.sidebar.success(
@@ -208,6 +226,13 @@ if st.session_state.work_mode == "回测":
         st.sidebar.warning(f"⚠️ 券商同步异常: {sync_result.get('message', '')}")
     else:
         st.sidebar.caption("数据源: AKShare (新浪/东方财富)")
+
+    ff_result = st.session_state.get("_ff_startup_result", {})
+    if ff_result.get("status") == "ok":
+        st.sidebar.caption(f"💰 资金流快照: {ff_result['date']} ({ff_result['count']}只)")
+    elif ff_result.get("status") == "error":
+        st.sidebar.caption(f"💰 资金流: {ff_result.get('message', '未同步')}")
+
     st.sidebar.caption("引擎: backtrader")
 
 else:
@@ -234,6 +259,11 @@ else:
         st.sidebar.warning(f"⚠️ 同步异常: {sync_result.get('message', '')}")
     else:
         st.sidebar.caption("数据源: AKShare (新浪/东方财富)")
+
+    ff_result = st.session_state.get("_ff_startup_result", {})
+    if ff_result.get("status") == "ok":
+        st.sidebar.caption(f"💰 资金流快照: {ff_result['date']} ({ff_result['count']}只)")
+
     st.sidebar.caption("引擎: backtrader")
 
 # =========================== 主区域 Tab 路由 ===========================
