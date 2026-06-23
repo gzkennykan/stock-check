@@ -186,6 +186,39 @@ def render():
     if "wf_auto_status" not in st.session_state:
         st.session_state.wf_auto_status = {}
 
+    # ── 单股快速诊断 ──
+    diag_col1, diag_col2, diag_col3 = st.columns([3, 1, 3])
+    with diag_col1:
+        quick_code = st.text_input(
+            "🔍 输入股票代码快速诊断",
+            placeholder="如：600519（沪深A股6位代码）",
+            key="wf_quick_code",
+            label_visibility="collapsed",
+        )
+    with diag_col2:
+        if st.button("🔬 诊断", use_container_width=True, key="wf_quick_diag_btn"):
+            if quick_code and len(quick_code.strip()) == 6 and quick_code.strip().isdigit():
+                code = quick_code.strip().zfill(6)
+                st.session_state.wf_quick_diag_code = code
+                st.session_state.wf_quick_diag_trigger = True
+            else:
+                st.error("请输入6位数字代码")
+    with diag_col3:
+        if st.session_state.get("wf_quick_diag_trigger") and st.session_state.get("wf_quick_diag_code"):
+            st.caption(f"✅ 上次诊断: {st.session_state.wf_quick_diag_code}")
+
+    # 单股诊断结果
+    if st.session_state.get("wf_quick_diag_trigger"):
+        code = st.session_state.get("wf_quick_diag_code", "")
+        if code:
+            name_map = get_stock_name_map()
+            with st.spinner(f"正在诊断 {code} {name_map.get(code, '')} ..."):
+                _run_deep_diagnostics([code], name_map)
+            st.session_state.wf_quick_diag_trigger = False
+
+    if st.session_state.get("wf_quick_diag_trigger") or st.session_state.get("wf_quick_diag_code"):
+        st.divider()
+
     # ── 一键选股按钮 ──
     btn_col1, btn_col2 = st.columns([2, 5])
     with btn_col1:
