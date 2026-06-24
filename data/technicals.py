@@ -16,7 +16,7 @@ def get_kline_ohlcv(symbol: str, limit: int = 300) -> pd.DataFrame | None:
             SELECT trade_date, open, high, low, close, volume
             FROM daily_kline
             WHERE symbol = ?
-            ORDER BY trade_date ASC
+            ORDER BY trade_date DESC
             LIMIT ?
         """, [str(symbol).strip().zfill(6), limit]).df()
         if df.empty:
