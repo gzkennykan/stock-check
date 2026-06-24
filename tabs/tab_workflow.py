@@ -42,6 +42,69 @@ def _filter_valid_codes(codes: set) -> set:
     return {c for c in codes if str(c).zfill(6) in valid}
 
 
+_NAME_TO_CODE: dict = None  # lazy reverse lookup cache
+
+
+def _get_name_to_code() -> dict:
+    """构建 名称→代码 反向映射（小写key用于模糊匹配）"""
+    global _NAME_TO_CODE
+    if _NAME_TO_CODE is not None:
+        return _NAME_TO_CODE
+    name_map = get_stock_name_map()
+    _NAME_TO_CODE = {}
+    for code, name in name_map.items():
+        if name:
+            lowered = name.lower().replace(" ", "")
+            _NAME_TO_CODE.setdefault(lowered, []).append(code)
+    return _NAME_TO_CODE
+
+
+def _resolve_code(raw: str) -> str | None:
+    """
+    智能解析用户输入：纯数字6位 → 代码；其他 → 按名称模糊搜索。
+    返回单个6位代码，或 None 表示未匹配。
+    多个匹配时通过 st.warning 提示，返回第一个。
+    """
+    raw = raw.strip()
+    # 纯数字 → 代码
+    if raw.isdigit() and len(raw) == 6:
+        return raw.zfill(6)
+
+    # 否则按名称搜索
+    name_to_code = _get_name_to_code()
+    if not name_to_code:
+        return None
+
+    lowered = raw.lower().replace(" ", "")
+    # 精确匹配
+    if lowered in name_to_code:
+        codes = name_to_code[lowered]
+        if len(codes) == 1:
+            return codes[0]
+        st.warning(f"「{raw}」匹配多只: {', '.join(codes)}，默认选 {codes[0]}")
+        return codes[0]
+
+    # 模糊匹配：用户输入是名称的子串
+    matches = []
+    for name_key, codes in name_to_code.items():
+        if lowered in name_key:
+            matches.extend(codes)
+    if not matches:
+        # 反向模糊：部分字匹配
+        for name_key, codes in name_to_code.items():
+            if any(char in name_key for char in lowered):
+                matches.extend(codes)
+
+    unique = list(dict.fromkeys(matches))  # 去重保序
+    if not unique:
+        return None
+    if len(unique) > 1:
+        name_map = get_stock_name_map()
+        hint = ", ".join(f"{c}({name_map.get(c, '')})" for c in unique[:10])
+        st.warning(f"「{raw}」匹配 {len(unique)} 只: {hint}，默认选 {unique[0]}")
+    return unique[0]
+
+
 def _fmt_time(t):
     if pd.isna(t):
         return "-"
@@ -189,20 +252,24 @@ def render():
     # ── 单股快速诊断 ──
     diag_col1, diag_col2, diag_col3 = st.columns([3, 1, 3])
     with diag_col1:
-        quick_code = st.text_input(
-            "🔍 输入股票代码快速诊断",
-            placeholder="如：600519（沪深A股6位代码）",
+        quick_input = st.text_input(
+            "🔍 输入股票代码或名称快速诊断",
+            placeholder="如：600519 或 贵州茅台",
             key="wf_quick_code",
             label_visibility="collapsed",
         )
     with diag_col2:
         if st.button("🔬 诊断", use_container_width=True, key="wf_quick_diag_btn"):
-            if quick_code and len(quick_code.strip()) == 6 and quick_code.strip().isdigit():
-                code = quick_code.strip().zfill(6)
-                st.session_state.wf_quick_diag_code = code
-                st.session_state.wf_quick_diag_trigger = True
+            raw = quick_input.strip() if quick_input else ""
+            if not raw:
+                st.error("请输入股票代码或名称")
             else:
-                st.error("请输入6位数字代码")
+                code = _resolve_code(raw)
+                if code:
+                    st.session_state.wf_quick_diag_code = code
+                    st.session_state.wf_quick_diag_trigger = True
+                else:
+                    st.error(f"未找到匹配「{raw}」的股票")
     with diag_col3:
         if st.session_state.get("wf_quick_diag_trigger") and st.session_state.get("wf_quick_diag_code"):
             st.caption(f"✅ 上次诊断: {st.session_state.wf_quick_diag_code}")
