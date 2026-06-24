@@ -6,7 +6,7 @@ from datetime import datetime
 from data.zt_pool import get_zt_pool, get_zt_summary
 from data.screener import get_fund_flow_data, get_stock_list
 from data.anomaly import run_all_anomalies
-from data.candlestick import scan_all_candlestick_patterns
+from data.candlestick import scan_all_candlestick_patterns, scan_pandas_ta_patterns
 from data.patterns import run_all_patterns
 from data.factors import compute_composite_ranking
 from data.industry_db import compute_industry_momentum, get_industry_list_from_db

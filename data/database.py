@@ -48,6 +48,15 @@ def _ensure_tables(conn) -> None:
             updated_at  TIMESTAMP     DEFAULT CURRENT_TIMESTAMP
         )
     """)
+    # 自选股表
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS watchlist (
+            symbol      VARCHAR(10)   PRIMARY KEY,
+            name        VARCHAR(50),
+            added_at    TIMESTAMP     DEFAULT CURRENT_TIMESTAMP,
+            note        VARCHAR(200)
+        )
+    """)
     # 每日资金流向快照（同花顺源，日积月累）
     conn.execute("""
         CREATE TABLE IF NOT EXISTS fund_flow_daily (
@@ -665,6 +674,51 @@ def get_stock_name_map() -> dict[str, str]:
             "SELECT symbol, name FROM stock_info WHERE name IS NOT NULL AND name != ''"
         ).fetchall()
         return {row[0]: row[1] for row in r if row[1]}
+    finally:
+        conn.close()
+
+
+# ══════════════════════════════════════════
+# 自选股 CRUD
+# ══════════════════════════════════════════
+
+def add_to_watchlist(symbol: str, name: str = "", note: str = "") -> bool:
+    """添加/更新自选股"""
+    conn = get_connection(read_only=False)
+    try:
+        conn.execute("""
+            INSERT OR REPLACE INTO watchlist (symbol, name, note)
+            VALUES (?, ?, ?)
+        """, [str(symbol).strip().zfill(6), name, note])
+        return True
+    except Exception:
+        return False
+    finally:
+        conn.close()
+
+
+def remove_from_watchlist(symbol: str) -> bool:
+    """从自选股移除"""
+    conn = get_connection(read_only=False)
+    try:
+        conn.execute("DELETE FROM watchlist WHERE symbol = ?",
+                     [str(symbol).strip().zfill(6)])
+        return True
+    except Exception:
+        return False
+    finally:
+        conn.close()
+
+
+def get_watchlist() -> pd.DataFrame:
+    """获取全部自选股"""
+    conn = get_connection(read_only=True)
+    try:
+        if not _table_exists(conn, "watchlist"):
+            return pd.DataFrame(columns=["symbol", "name", "added_at", "note"])
+        return conn.execute(
+            "SELECT symbol, name, added_at, note FROM watchlist ORDER BY added_at DESC"
+        ).df()
     finally:
         conn.close()
 

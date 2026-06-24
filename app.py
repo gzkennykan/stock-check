@@ -335,7 +335,7 @@ if last_run:
 
 # =========================== 主区域 Tab 路由 ===========================
 
-tab_wf, tab_ai, tab1, tab2, tab3, tab_perf, tab_ml, tab4, tab5, tab6, tab7, tab8, tab9, tab10, tab11, tab12, tab13 = st.tabs([
+tab_wf, tab_ai, tab1, tab2, tab3, tab_perf, tab_ml, tab4, tab5, tab6, tab7, tab_wl, tab8, tab9, tab10, tab11, tab12, tab13 = st.tabs([
     "📋 选股工作流",
     "🤖 AI智能分析",
     "📊 单策略回测", "📋 策略对比", "🔧 参数优化",
@@ -343,6 +343,7 @@ tab_wf, tab_ai, tab1, tab2, tab3, tab_perf, tab_ml, tab4, tab5, tab6, tab7, tab8
     "🧠 ML因子研究",
     "💰 资金排名",
     "🧠 智能选股", "🐉 强势股", "🔥 值博率",
+    "⭐ 自选股",
     "🧺 组合回测", "🌏 北向&融资", "📊 财务分析", "🏭 市场全景",
     "🗄️ 数据中心", "📊 高级分析",
 ])
@@ -358,6 +359,7 @@ from tabs.tab5_market_rank import render as render_tab4
 from tabs.tab8_smart import render as render_tab5
 from tabs.tab9_lhb import render as render_tab6
 from tabs.tab10_upside import render as render_tab7
+from tabs.tab_watchlist import render as render_wl
 from tabs.tab11_portfolio import render as render_tab8
 from tabs.tab12_northbound import render as render_tab9
 from tabs.tab13_fundamental import render as render_tab10
@@ -397,6 +399,9 @@ with tab6:
 
 with tab7:
     render_tab7()
+
+with tab_wl:
+    render_wl()
 
 with tab8:
     render_tab8()

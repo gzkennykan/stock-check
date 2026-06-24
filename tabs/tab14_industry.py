@@ -53,8 +53,8 @@ def render():
     st.caption("行业热度 + 成分股 + 市场宽度 — 全方位感知市场温度")
     st.info("💡 **行业轮动分析**已整合至「📊 高级分析 → 🔄 行业轮动」子页，基于 DuckDB 历史数据提供更全面的多周期动量分析")
 
-    tab_i1, tab_i2, tab_i3 = st.tabs([
-        "🔥 行业热度", "🔬 成分股", "📊 市场宽度"
+    tab_i1, tab_i2, tab_i3, tab_i4 = st.tabs([
+        "🔥 行业热度", "🔬 成分股", "📊 市场宽度", "🗺️ 板块热力图"
     ])
 
     # ── Tab 1: 行业热度排名 ──
@@ -344,3 +344,148 @@ def render():
             st.caption("💡 **市场宽度**通过全市场涨跌比例、资金流向分布、成交额集中度等指标综合判断市场温度。"
                       "宽度>65%上涨为普涨格局（适合追涨），<35%为普跌（适合防守）。"
                       "涨停数反映游资活跃度，资金宽度反映主力意愿。")
+
+    # ══════════════════════════════════════════
+    # Tab 4: 板块热力图
+    # ══════════════════════════════════════════
+    with tab_i4:
+        st.subheader("🔥 板块联动热力图")
+        st.caption("行业 × 涨跌幅/资金流向矩阵 — 一眼看穿市场热点")
+
+        spot = _load_industry_spot()
+        if spot.empty:
+            st.info("暂无行业数据")
+        else:
+            # 确定列
+            name_col = pct_col = None
+            for c in spot.columns:
+                cn = str(c)
+                if "名称" in cn or "name" in cn.lower():
+                    name_col = c
+                if "涨跌幅" in cn or "pct" in cn.lower():
+                    pct_col = c
+
+            if name_col and pct_col:
+                heat_df = spot[[name_col, pct_col]].copy()
+                heat_df[pct_col] = pd.to_numeric(heat_df[pct_col], errors="coerce")
+                heat_df = heat_df.dropna(subset=[pct_col])
+                heat_df = heat_df.sort_values(pct_col, ascending=False)
+
+                # 按首字分组（金融、医药、电子、制造、消费、能源...）
+                def _classify_industry(name: str) -> str:
+                    n = str(name)
+                    for kw in ["银行", "保险", "证券", "金融"]:
+                        if kw in n: return "🏦 金融"
+                    for kw in ["医药", "医疗", "生物", "制药"]:
+                        if kw in n: return "💊 医药"
+                    for kw in ["半导体", "芯片", "电子", "计算机", "软件", "通信", "5G", "互联"]:
+                        if kw in n: return "💻 科技"
+                    for kw in ["汽车", "新能源", "光伏", "风电", "锂电", "储能", "电力"]:
+                        if kw in n: return "⚡ 新能源"
+                    for kw in ["食品", "饮料", "白酒", "家电", "消费", "零售", "旅游"]:
+                        if kw in n: return "🛒 消费"
+                    for kw in ["钢铁", "有色", "煤炭", "化工", "建材", "水泥"]:
+                        if kw in n: return "🏗️ 材料"
+                    for kw in ["军工", "航空", "航天", "船舶"]:
+                        if kw in n: return "🛡️ 军工"
+                    for kw in ["地产", "房地产", "建筑", "装修"]:
+                        if kw in n: return "🏠 地产"
+                    for kw in ["传媒", "游戏", "影视", "教育", "广告"]:
+                        if kw in n: return "🎬 传媒"
+                    for kw in ["农林", "农业", "养殖", "种业"]:
+                        if kw in n: return "🌾 农业"
+                    for kw in ["交通", "物流", "港口", "铁路", "公路"]:
+                        if kw in n: return "🚚 交运"
+                    for kw in ["环保", "水务", "燃气"]:
+                        if kw in n: return "♻️ 公用"
+                    return "📦 其他"
+
+                heat_df["板块"] = heat_df[name_col].apply(_classify_industry)
+                heat_df["行业简称"] = heat_df[name_col].apply(
+                    lambda x: str(x)[:6].replace("行业", "").replace("板块", ""))
+
+                # 构建板块 × 行业位置的热力图数据
+                sectors = heat_df["板块"].unique().tolist()
+                # 每个板块内按涨跌幅排列
+                heat_rows = []
+                for sec in sectors:
+                    sec_data = heat_df[heat_df["板块"] == sec].sort_values(pct_col, ascending=False)
+                    for _, row in sec_data.iterrows():
+                        heat_rows.append({
+                            "板块": sec,
+                            "行业": row["行业简称"],
+                            "涨跌幅": round(row[pct_col], 2),
+                        })
+
+                heat_full = pd.DataFrame(heat_rows)
+
+                # Plotly 热力图
+                if not heat_full.empty and len(heat_full) > 1:
+                    # pivot: 每个板块选TOP/BOTTOM
+                    fig = go.Figure(data=go.Heatmap(
+                        z=[heat_full["涨跌幅"].values],
+                        x=heat_full["行业"].values,
+                        y=["全行业"],
+                        text=[[f"{v:+.2f}%" for v in heat_full["涨跌幅"].values]],
+                        texttemplate="%{text}",
+                        textfont={"size": 10},
+                        colorscale=[
+                            [0.0, "#FF1744"],
+                            [0.3, "#FF9100"],
+                            [0.45, "#FFF176"],
+                            [0.5, "#F5F5F5"],
+                            [0.55, "#C8E6C9"],
+                            [0.7, "#66BB6A"],
+                            [1.0, "#00C853"],
+                        ],
+                        zmid=0,
+                        zmin=-5, zmax=5,
+                        hovertemplate="%{x}: %{z:+.2f}%<extra></extra>",
+                    ))
+                    fig.update_layout(
+                        height=120,
+                        margin=dict(l=20, r=20, t=20, b=80),
+                        xaxis=dict(tickangle=-45, tickfont=dict(size=9)),
+                    )
+                    st.plotly_chart(fig, use_container_width=True)
+
+                # 按板块展开
+                for sec in sectors:
+                    sec_data = heat_df[heat_df["板块"] == sec].sort_values(pct_col, ascending=False)
+                    if sec_data.empty:
+                        continue
+                    with st.expander(f"{sec} ({len(sec_data)} 个子行业)", expanded=len(sec_data) <= 5):
+                        cols = st.columns(len(sec_data))
+                        for i, (_, row) in enumerate(sec_data.iterrows()):
+                            pct_val = row[pct_col]
+                            color = "#00C853" if pct_val > 2 else ("#FF9100" if pct_val > 0
+                                    else ("#FF1744" if pct_val < -2 else "#888"))
+                            with cols[i]:
+                                st.markdown(
+                                    f"<div style='text-align:center;padding:8px;border-radius:8px;"
+                                    f"background:{color}22;border:1px solid {color}44'>"
+                                    f"<small>{row['行业简称']}</small><br>"
+                                    f"<b style='color:{color};font-size:18px'>{pct_val:+.2f}%</b></div>",
+                                    unsafe_allow_html=True,
+                                )
+
+    # ── 行业成分股联动 ──
+    if name_col and not spot.empty:
+        st.divider()
+        st.subheader("🔍 行业下钻")
+        all_industries = sorted(spot[name_col].dropna().unique().tolist())
+        selected_industry = st.selectbox(
+            "选择行业查看成分股",
+            options=all_industries,
+            key="heat_ind_sel",
+        )
+        if selected_industry and st.button("查看成分股", key="heat_ind_go"):
+            from data.industry import fetch_industry_stocks
+            try:
+                stocks = fetch_industry_stocks(selected_industry)
+                if stocks:
+                    st.dataframe(pd.DataFrame(stocks), use_container_width=True, hide_index=True)
+                else:
+                    st.info("该行业暂无成分股数据")
+            except Exception as e:
+                st.error(f"获取失败: {e}")
