@@ -42,10 +42,16 @@ def parse_day_file_tail(file_path: Path, n_records: int = 5) -> pd.DataFrame | N
     fsize = file_path.stat().st_size
     if fsize == 0:
         return None
-    # 只读末尾 N 条 × 32 字节
-    read_size = min(fsize, n_records * TDX_DAY_SIZE + 32)
+
+    # 确保文件大小对齐 32 字节边界，忽略末尾不完整记录
+    aligned_size = (fsize // TDX_DAY_SIZE) * TDX_DAY_SIZE
+    if aligned_size == 0:
+        return None
+
+    # 只读末尾 N 条 × 32 字节（多读一条防止对齐问题）
+    read_size = min(aligned_size, (n_records + 1) * TDX_DAY_SIZE)
     with open(file_path, "rb") as fh:
-        fh.seek(fsize - read_size)
+        fh.seek(aligned_size - read_size)
         tail_bytes = fh.read(read_size)
     return _parse_day_bytes(tail_bytes, file_path.name)
 
@@ -72,6 +78,16 @@ def _parse_day_bytes(raw: bytes, name: str = "") -> pd.DataFrame | None:
 
         # 跳过无效记录
         if date < 19900101 or date > 20991231 or op == 0:
+            continue
+
+        # 价格合理性校验：A股价格应在 0.01 ~ 20000 之间
+        # 过高/过低通常是字节对齐错误导致的脏数据
+        divisor = 100.0
+        prices = [op / divisor, hi / divisor, lo / divisor, cl / divisor]
+        if any(p <= 0 or p > 20000 for p in prices):
+            continue
+        # OHLC 逻辑校验：high >= low, high >= open/close, low <= open/close
+        if hi < lo or hi < op or hi < cl or lo > op or lo > cl:
             continue
 
         records.append({
