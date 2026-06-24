@@ -18,32 +18,30 @@ _DB_CONN = None
 
 
 class _SharedConnection:
-    """DuckDB 连接包装器：共享单例，close() 为 no-op"""
+    """DuckDB 单例连接包装：close() 为 no-op，其余全部委托原始连接。
 
-    def __init__(self, conn):
-        self._wrapped = conn
+    关键：不定义 execute() —— 让 __getattr__ 返回原始连接的 bound method，
+    这样 DuckDB 的 DataFrame 自动注册（依赖 Python 调用栈）不会被包装层打断。
+    """
+
+    def __init__(self, raw):
+        self.__dict__["_raw"] = raw
 
     def close(self):
-        pass  # 单例连接，不真正关闭
-
-    def execute(self, sql, params=None):
-        if params is not None:
-            return self._wrapped.execute(sql, params)
-        return self._wrapped.execute(sql)
-
-    def cursor(self):
-        return self._wrapped.cursor()
+        pass  # 下游代码可安全调用，不真正关闭
 
     def __getattr__(self, name):
-        # 委托所有其他属性到原始连接
-        return getattr(self._wrapped, name)
+        return getattr(self._raw, name)
+
+    def __setattr__(self, name, value):
+        if name == "_raw":
+            self.__dict__["_raw"] = value
+        else:
+            setattr(self._raw, name, value)
 
 
 def get_connection(read_only: bool = False):
-    """获取 DuckDB 单例连接（同一进程内共享一个连接，避免锁冲突）
-
-    由于 Streamlit 所有 Tab 在同一个进程中渲染，共享连接是安全的。
-    close() 被重写为 no-op，连接在进程退出时自动释放。"""
+    """获取 DuckDB 单例连接（同一进程内共享，避免多 Tab 锁冲突）"""
     global _DB_CONN
     import duckdb
     if _DB_CONN is None:
@@ -144,18 +142,16 @@ def insert_kline(symbol: str, df: pd.DataFrame, source: str = "akshare") -> int:
         write_df = df[["open", "high", "low", "close", "volume"]].copy()
         write_df["symbol"] = symbol
         write_df["source"] = source
-        write_df["trade_date"] = write_df.index
+        write_df["trade_date"] = write_df.index  # index 是 date
         write_df["updated_at"] = datetime.now()
 
-        # 注册 DataFrame 到 DuckDB（SharedConnection 下需显式注册）
-        conn._wrapped.register("_write_df", write_df)
-
+        # DuckDB 原生 upsert: INSERT OR REPLACE
         conn.execute("BEGIN")
         conn.execute("""
             INSERT OR REPLACE INTO daily_kline
                 (symbol, trade_date, open, high, low, close, volume, source, updated_at)
             SELECT symbol, trade_date, open, high, low, close, volume, source, updated_at
-            FROM _write_df
+            FROM write_df
         """)
         conn.execute("COMMIT")
         return len(write_df)
@@ -189,8 +185,7 @@ def insert_kline_batch(records: list[dict]) -> int:
             write_df["source"] = rec.get("source", "akshare")
             write_df["trade_date"] = write_df.index
             write_df["updated_at"] = datetime.now()
-            conn._wrapped.register("_write_df_batch", write_df)
-            conn.execute("INSERT OR REPLACE INTO daily_kline BY NAME SELECT * FROM _write_df_batch")
+            conn.execute("INSERT OR REPLACE INTO daily_kline BY NAME SELECT * FROM write_df")
             total += len(write_df)
     finally:
         conn.close()
