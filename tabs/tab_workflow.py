@@ -620,7 +620,7 @@ def _run_deep_diagnostics(codes: list, name_map: dict, silent: bool = False):
     3. 基本面 20% — ROE/利润增速/毛利率/负债率
     4. 机构行为 10% — 涨停池/资金TOP20重叠
     """
-    from data.technicals import compute_full_analysis
+    from data.technicals import compute_full_analysis, compute_multitimeframe
     from data.fund_flow import get_fund_flow_summary
     from data.fundamental import fetch_financial_indicators
     from data.database import get_stock_name_map
@@ -701,6 +701,19 @@ def _run_deep_diagnostics(codes: list, name_map: dict, silent: bool = False):
             row["trend"] = {}
 
         row["tech_score"] = min(tech_score, 70)  # raw max = 70
+
+        # ── 多周期分析 ──
+        try:
+            mtf = compute_multitimeframe(code)
+            row["mtf"] = mtf
+            row["mtf_score"] = mtf.get("mtf_score", 0)
+            row["mtf_signals"] = mtf.get("resonance_signals", [])
+            # 多周期共振加在技术面上
+            row["tech_score"] = min(70, row["tech_score"] + row["mtf_score"] // 10)
+        except Exception:
+            row["mtf"] = {}
+            row["mtf_score"] = 0
+            row["mtf_signals"] = []
 
         # ── 维度2：资金面 ──
         flow_score = 0
@@ -902,6 +915,18 @@ def _run_deep_diagnostics(codes: list, name_map: dict, silent: bool = False):
                 st.write(f"- MA60: {r.get('ma60', 'N/A')}")
                 st.write(f"- MA120: {r.get('ma120', 'N/A')}")
                 st.write(f"- MACD柱: {r.get('macd_hist', 'N/A')}")
+
+                # 多周期共振信号
+                mtf = r.get("mtf", {})
+                mtf_signals = r.get("mtf_signals", [])
+                if mtf_signals:
+                    st.markdown("**🔄 多周期共振**")
+                    for sig in mtf_signals:
+                        emoji = "🔴" if sig.get("strength") == "strong" else "🟡"
+                        st.write(f"- {emoji} {sig.get('type', '')}")
+                if r.get("mtf_score", 0) > 0:
+                    st.write(f"- 多周期评分: {r['mtf_score']}/100")
+
                 st.caption(f"得分: {r['tech_score']}/70")
 
             with c2:

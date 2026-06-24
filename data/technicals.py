@@ -167,3 +167,227 @@ def compute_full_analysis(symbol: str) -> dict:
         "level_60d_low": round(levels_60.get("low", 0), 2),
         "df": df,  # 完整 DataFrame，用于画图
     }
+
+
+# ══════════════════════════════════════════════════════════
+# 多周期分析（对标 CZSC 缠论多周期联动）
+# ══════════════════════════════════════════════════════════
+
+def _get_kline_period(symbol: str, period: str = "daily", limit: int = 300) -> pd.DataFrame | None:
+    """获取指定周期的K线"""
+    if period == "daily":
+        return get_kline_ohlcv(symbol, limit=limit)
+
+    conn = get_connection(read_only=True)
+    try:
+        # 从日线聚合生成周线/月线
+        df = conn.execute("""
+            SELECT trade_date, open, high, low, close, volume
+            FROM daily_kline
+            WHERE symbol = ?
+            ORDER BY trade_date DESC
+            LIMIT ?
+        """, [str(symbol).strip().zfill(6), limit * 30]).df()  # 取更多日线用于聚合
+
+        if df.empty:
+            return None
+
+        df["trade_date"] = pd.to_datetime(df["trade_date"])
+        df = df.sort_values("trade_date").set_index("trade_date")
+
+        if period == "weekly":
+            resampled = df.resample("W")
+        elif period == "monthly":
+            resampled = df.resample("ME")
+        else:
+            return df
+
+        agg = pd.DataFrame({
+            "open": resampled["open"].first(),
+            "high": resampled["high"].max(),
+            "low": resampled["low"].min(),
+            "close": resampled["close"].last(),
+            "volume": resampled["volume"].sum(),
+        }).dropna()
+
+        return agg.tail(limit)
+    finally:
+        conn.close()
+
+
+def compute_multitimeframe(symbol: str) -> dict:
+    """
+    多周期技术分析：日线 + 周线 + 月线。
+
+    返回:
+        {
+            "daily": {日线指标 dict},
+            "weekly": {周线指标 dict},
+            "monthly": {月线指标 dict},
+            "resonance_signals": [共振信号列表],
+            "mtf_score": 多周期综合评分 0-100,
+        }
+    """
+    results = {}
+    for period, label, limit in [("daily", "日线", 300), ("weekly", "周线", 120), ("monthly", "月线", 60)]:
+        df = _get_kline_period(symbol, period=period, limit=limit)
+        if df is None or df.empty or len(df) < 20:
+            results[label] = {"error": f"{label}数据不足"}
+            continue
+
+        df = compute_technicals(df)
+        last = df.iloc[-1]
+
+        results[label] = {
+            "close": round(float(last["close"]), 2),
+            "ma20": round(float(last["ma20"]), 2) if pd.notna(last.get("ma20")) else None,
+            "ma60": round(float(last["ma60"]), 2) if pd.notna(last.get("ma60")) else None,
+            "ma120": round(float(last["ma120"]), 2) if pd.notna(last.get("ma120")) else None,
+            "rsi14": round(float(last["rsi14"]), 1) if pd.notna(last.get("rsi14")) else None,
+            "macd": round(float(last["macd"]), 4) if pd.notna(last.get("macd")) else None,
+            "macd_signal": round(float(last["macd_signal"]), 4) if pd.notna(last.get("macd_signal")) else None,
+            "macd_hist": round(float(last["macd_hist"]), 4) if pd.notna(last.get("macd_hist")) else None,
+            "ret_20": round(get_period_return(df, min(20, len(df)-1)) * 100, 2),
+            "trend": get_trend_status(df),
+            "n_bars": len(df),
+            "date_range": f"{df.index[0].date()} ~ {df.index[-1].date()}",
+        }
+
+    # ── 共振信号检测 ──
+    resonance = _detect_resonance(results)
+    results["resonance_signals"] = resonance
+    results["mtf_score"] = _compute_mtf_score(results, resonance)
+
+    return results
+
+
+def _detect_resonance(mtf: dict) -> list[dict]:
+    """
+    检测多周期共振信号：
+      - MACD 金叉共振：日线+周线同时金叉 → 强信号
+      - 均线多头共振：日线+周线同时站上 MA20 → 中期转强
+      - RSI 共振：日线+周线都在健康区间(40-70)
+      - 关键位共振：日线支撑位 = 周线支撑位 → 更强支撑
+    """
+    signals = []
+
+    daily = mtf.get("日线", {})
+    weekly = mtf.get("周线", {})
+    monthly = mtf.get("月线", {})
+
+    # MACD 金叉共振
+    if daily and weekly and "error" not in daily and "error" not in weekly:
+        d_macd = daily.get("macd") or 0
+        d_signal = daily.get("macd_signal") or 0
+        w_macd = weekly.get("macd") or 0
+        w_signal = weekly.get("macd_signal") or 0
+
+        d_golden = d_macd > d_signal
+        w_golden = w_macd > w_signal
+
+        if d_golden and w_golden:
+            signals.append({
+                "type": "MACD金叉共振",
+                "strength": "strong" if d_macd > 0 and w_macd > 0 else "medium",
+                "desc": "日线+周线 MACD 同时处于多头，中期上涨信号明确",
+            })
+        elif d_golden:
+            signals.append({
+                "type": "日线MACD金叉",
+                "strength": "medium",
+                "desc": "仅日线 MACD 金叉，等待周线确认",
+            })
+
+    # 均线多头共振
+    if daily and weekly and "error" not in daily and "error" not in weekly:
+        d_close = daily.get("close", 0)
+        d_ma20 = daily.get("ma20") or 0
+        w_close = weekly.get("close", 0)
+        w_ma20 = weekly.get("ma20") or 0
+
+        d_above = d_close > d_ma20 > 0
+        w_above = w_close > w_ma20 > 0
+
+        if d_above and w_above:
+            signals.append({
+                "type": "均线多头共振",
+                "strength": "strong",
+                "desc": "日线+周线同时站上 MA20，短中期趋势共振向上",
+            })
+        elif d_above:
+            signals.append({
+                "type": "日线站上MA20",
+                "strength": "medium",
+                "desc": "日线站上 MA20，短期偏多，关注周线能否跟上",
+            })
+        elif w_above:
+            signals.append({
+                "type": "周线站上MA20",
+                "strength": "medium",
+                "desc": "周线站上 MA20，中期趋势健康，日线回调或是布局机会",
+            })
+
+    # RSI 共振
+    if daily and weekly:
+        d_rsi = daily.get("rsi14")
+        w_rsi = weekly.get("rsi14")
+        if d_rsi and w_rsi:
+            if 40 <= d_rsi <= 70 and 40 <= w_rsi <= 70:
+                signals.append({
+                    "type": "RSI健康共振",
+                    "strength": "medium",
+                    "desc": f"日线RSI={d_rsi}，周线RSI={w_rsi}，均处于健康区间",
+                })
+            elif d_rsi < 30 and w_rsi < 40:
+                signals.append({
+                    "type": "超卖共振",
+                    "strength": "medium",
+                    "desc": f"日线RSI={d_rsi} + 周线RSI={w_rsi}，双双超卖，反弹概率升高",
+                })
+
+    # 月线确认
+    if monthly and "error" not in monthly:
+        m_close = monthly.get("close", 0)
+        m_ma20 = monthly.get("ma20") or 0
+        if m_close > m_ma20 > 0:
+            signals.append({
+                "type": "月线多头",
+                "strength": "strong",
+                "desc": "月线站上 MA20，长期趋势向好，日周线信号可信度提升",
+            })
+
+    return signals
+
+
+def _compute_mtf_score(mtf: dict, signals: list) -> int:
+    """
+    多周期综合评分 0-100：
+      - 日线趋势: 0-30
+      - 周线趋势: 0-30
+      - 月线趋势: 0-20
+      - 共振加分: 0-20
+    """
+    score = 0
+    for label, max_s in [("日线", 30), ("周线", 30), ("月线", 20)]:
+        d = mtf.get(label, {})
+        if not d or "error" in d:
+            continue
+        close = d.get("close", 0)
+        ma20 = d.get("ma20") or 0
+        ma60 = d.get("ma60") or 0
+        rsi = d.get("rsi14")
+
+        if close > ma20 > 0:
+            score += max_s * 0.5
+        if close > ma60 > 0:
+            score += max_s * 0.3
+        if rsi and 40 <= rsi <= 70:
+            score += max_s * 0.2
+
+    # 共振加分
+    strong_signals = [s for s in signals if s.get("strength") == "strong"]
+    medium_signals = [s for s in signals if s.get("strength") == "medium"]
+    score += min(20, len(strong_signals) * 8 + len(medium_signals) * 3)
+
+    return min(100, score)
+

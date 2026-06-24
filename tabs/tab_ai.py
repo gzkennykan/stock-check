@@ -2,6 +2,8 @@
 import streamlit as st
 import pandas as pd
 from datetime import datetime
+from plotly.subplots import make_subplots
+import plotly.graph_objects as go
 
 from data.llm_analysis import (
     analyze_stock, analyze_portfolio, set_llm_config,
@@ -95,8 +97,8 @@ def render():
     st.divider()
 
     # ── 主功能区 ──
-    tab_single, tab_batch, tab_portfolio = st.tabs([
-        "🔍 单股分析", "📋 批量分析", "🧺 组合诊断"
+    tab_single, tab_sentiment, tab_batch, tab_portfolio = st.tabs([
+        "🔍 单股分析", "📰 舆情分析", "📋 批量分析", "🧺 组合诊断"
     ])
 
     name_map = get_stock_name_map()
@@ -141,7 +143,39 @@ def render():
                 _render_single_result(result)
 
     # ══════════════════════════════════════════
-    # Tab 2: 批量分析
+    # Tab 2: 新闻舆情
+    # ══════════════════════════════════════════
+    with tab_sentiment:
+        st.subheader("📰 新闻舆情分析")
+        st.caption("基于东方财富个股新闻 + 中文情绪词典的舆情打分")
+
+        sent_col1, sent_col2 = st.columns([3, 1])
+        with sent_col1:
+            sent_input = st.text_input(
+                "输入股票代码",
+                placeholder="如：600519",
+                key="sent_input",
+            )
+        with sent_col2:
+            do_sentiment = st.button("🔍 分析舆情", use_container_width=True, type="primary", key="sent_go")
+
+        if do_sentiment and sent_input.strip():
+            code = _resolve_input(sent_input.strip(), name_map)
+            if not code:
+                st.error(f"未找到「{sent_input}」")
+            else:
+                from data.sentiment import get_sentiment_summary
+                name = name_map.get(code, "")
+                with st.spinner(f"获取 {code} {name} 新闻舆情..."):
+                    result = get_sentiment_summary(code, days=7)
+
+                if result.get("error"):
+                    st.warning(result["error"])
+                else:
+                    _render_sentiment_result(code, name, result)
+
+    # ══════════════════════════════════════════
+    # Tab 3: 批量分析
     # ══════════════════════════════════════════
     with tab_batch:
         batch_input = st.text_area(
@@ -358,3 +392,71 @@ def _render_portfolio_result(result: dict):
         df = pd.DataFrame(rows)
         df = df.sort_values("评分", ascending=False).reset_index(drop=True)
         st.dataframe(df, use_container_width=True, hide_index=True)
+
+
+def _render_sentiment_result(code: str, name: str, result: dict):
+    """渲染舆情分析结果"""
+    import plotly.graph_objects as go
+
+    st.divider()
+    st.subheader(f"📰 {code} {name} — 舆情分析")
+
+    # 概览卡片
+    sc1, sc2, sc3, sc4, sc5 = st.columns(5)
+    with sc1:
+        st.metric("近7日新闻", result["total_news"])
+    with sc2:
+        st.metric("😊 正面", result["positive_count"])
+    with sc3:
+        st.metric("😐 中性", result["neutral_count"])
+    with sc4:
+        st.metric("😟 负面", result["negative_count"])
+    with sc5:
+        avg = result.get("avg_score", 0)
+        trend = result.get("sentiment_trend", "stable")
+        trend_emoji = {"improving": "📈", "deteriorating": "📉", "stable": "➡️"}
+        st.metric("情绪均分", f"{avg:.2f}", delta=trend_emoji.get(trend, ""))
+
+    # 趋势图
+    daily = result.get("daily_scores", [])
+    if daily:
+        dates = [d["date"] for d in daily]
+        scores = [d["avg_score"] for d in daily]
+        counts = [d["count"] for d in daily]
+
+        fig = make_subplots(specs=[[{"secondary_y": True}]])
+        fig.add_trace(
+            go.Bar(x=dates, y=counts, name="新闻量", marker_color="#90CAF9", opacity=0.7),
+            secondary_y=True,
+        )
+        fig.add_trace(
+            go.Scatter(x=dates, y=scores, name="情绪分", mode="lines+markers",
+                       line=dict(color="#FF6D00", width=2), marker=dict(size=8)),
+            secondary_y=False,
+        )
+        fig.add_hline(y=0, line_dash="dash", line_color="#888")
+        fig.update_layout(
+            title="近7日情绪趋势", height=350,
+            hovermode="x unified", margin=dict(l=20, r=20, t=40, b=20),
+        )
+        fig.update_yaxes(title_text="情绪分 (-1~1)", secondary_y=False)
+        fig.update_yaxes(title_text="新闻量", secondary_y=True)
+        st.plotly_chart(fig, use_container_width=True)
+
+    # 重大事件
+    key_events = result.get("key_events", [])
+    if key_events:
+        st.subheader("🚨 重大事件")
+        for ev in key_events[:8]:
+            st.write(f"- {ev}")
+
+    # 最正面/最负面
+    tc1, tc2 = st.columns(2)
+    with tc1:
+        st.caption("🟢 最正面新闻")
+        for t in result.get("top_positive", []):
+            st.write(f"- {t[:80]}")
+    with tc2:
+        st.caption("🔴 最负面新闻")
+        for t in result.get("top_negative", []):
+            st.write(f"- {t[:80]}")
