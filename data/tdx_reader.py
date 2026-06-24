@@ -238,6 +238,9 @@ def import_vipdoc_to_db_incremental(vipdoc_root: str | Path,
     all_files = scan_vipdoc(vipdoc_root)
     if symbols:
         all_files = [f for f in all_files if f["symbol"] in symbols]
+    # 只保留四大板块 A股（排除指数399xxx/债券/ETF/基金等）
+    from .database import is_target_stock
+    all_files = [f for f in all_files if is_target_stock(f["symbol"])]
     if not all_files:
         return {"imported": 0, "stocks": [], "errors": ["未找到 .day 文件"]}
 
