@@ -1,4 +1,4 @@
-"""Tab 16: 高级分析 — 多因子排名 + 形态扫描 + 异动检测 + 行业轮动 + K线形态 + 相关性 + 批量回测 + 量化信号 + 资金流向"""
+"""Tab 16: 高级分析 — 多因子排名 + 行业轮动 + 相关性 + 批量回测 + 量化信号 + 资金流向 + 个股诊断"""
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -6,9 +6,6 @@ from datetime import datetime
 
 from data.database import get_latest_trading_date, get_stocks_in_db, get_stock_name_map
 from data.factors import compute_composite_ranking
-from data.patterns import run_all_patterns
-from data.anomaly import run_all_anomalies
-from data.candlestick import scan_all_candlestick_patterns
 from data.correlation import (
     compute_full_correlation_matrix, find_low_correlation_pairs,
     find_hedge_pairs, compute_stock_distances, cluster_by_correlation,
@@ -181,172 +178,8 @@ def _render_factor_ranking():
 
 
 # ══════════════════════════════════════════════════
-# Sub-tab 2: Pattern Scanning
 # ══════════════════════════════════════════════════
-
-@st.cache_data(ttl=1800)
-def _load_patterns(end_date, params):
-    return run_all_patterns(end_date, **params)
-
-
-def _render_pattern_scanning():
-    st.subheader("技术形态全市场扫描")
-
-    latest_date = get_latest_trading_date()
-    if latest_date is None:
-        st.info("数据库暂无数据")
-        return
-
-    st.caption(f"扫描日期: {latest_date}")
-
-    with st.expander("扫描参数", expanded=True):
-        c1, c2, c3 = st.columns(3)
-        with c1:
-            gc_days = st.slider("金叉/死叉 回溯天数", 3, 30, 10, key="gc_days")
-            n_days = st.slider("新高/新低 N日", 20, 250, 60, 10, key="n_days")
-        with c2:
-            consol_th = st.slider("均线粘合 阈值(%)", 1.0, 8.0, 3.0, 0.5, key="consol_th")
-        with c3:
-            vol_mult = st.slider("放量突破 量比", 1.5, 5.0, 2.0, 0.5, key="vol_mult")
-
-        patterns_enabled = st.multiselect(
-            "启用形态类型（留空=全部）",
-            options=["金叉", "死叉", "均线粘合", "放量突破", "N日新高", "N日新低"],
-            default=[],
-            key="patterns_enabled",
-        )
-
-    if st.button("🔍 扫描全市场形态", type="primary", use_container_width=True,
-                 key="run_patterns"):
-        st.cache_data.clear()
-        with st.spinner("正在扫描技术形态（约 5 秒）..."):
-            params = {
-                "golden_cross_days": gc_days,
-                "death_cross_days": gc_days,
-                "consolidation_threshold": consol_th,
-                "volume_multiplier": vol_mult,
-                "n_days": n_days,
-            }
-            results = _load_patterns(latest_date, params)
-            st.session_state["pattern_results"] = results
-
-    if "pattern_results" not in st.session_state:
-        st.info("点击上方按钮开始扫描")
-        return
-
-    results = st.session_state["pattern_results"]
-    if not results:
-        st.warning("未发现任何形态信号")
-        return
-
-    # 统计卡片
-    cols = st.columns(len(results))
-    for i, (name, df) in enumerate(results.items()):
-        with cols[i]:
-            st.metric(name, len(df))
-
-    # 逐类展示
-    for name, df in results.items():
-        if patterns_enabled and name not in patterns_enabled:
-            continue
-        with st.expander(f"{name} ({len(df)} 只)", expanded=len(df) < 50):
-            display = _add_names(df)
-            display = display.rename(columns={
-                "symbol": "代码", "cross_date": "交叉日期",
-                "close": "收盘价", "ma5_val": "MA5", "ma20_val": "MA20",
-                "spread_pct": "偏离度%",
-            })
-            st.dataframe(display, use_container_width=True, hide_index=True)
-
-        # 导出
-        if len(df) > 0:
-            csv = df.to_csv(index=False).encode("utf-8")
-            safe_name = name.replace("/", "_")
-            st.download_button(
-                f"📥 导出 {name}", csv,
-                f"{safe_name}_{latest_date}.csv",
-                "text/csv", key=f"dl_{safe_name}"
-            )
-
-
-# ══════════════════════════════════════════════════
-# Sub-tab 3: Anomaly Detection
-# ══════════════════════════════════════════════════
-
-@st.cache_data(ttl=1800)
-def _load_anomalies(end_date, params):
-    return run_all_anomalies(end_date, **params)
-
-
-def _render_anomaly_detection():
-    st.subheader("每日异动检测")
-
-    latest_date = get_latest_trading_date()
-    if latest_date is None:
-        st.info("数据库暂无数据")
-        return
-
-    st.caption(f"检测日期: {latest_date}")
-
-    with st.expander("检测参数", expanded=True):
-        c1, c2, c3, c4 = st.columns(4)
-        with c1:
-            gap_th = st.slider("跳空阈值 (%)", 1.0, 10.0, 3.0, 0.5, key="gap_th")
-        with c2:
-            vspike_mult = st.slider("放量倍数", 2.0, 10.0, 3.0, 0.5, key="vspike_mult")
-        with c3:
-            limit_th = st.slider("涨跌停阈值 (%)", 5.0, 10.0, 9.0, 0.5, key="limit_th")
-        with c4:
-            cons_days = st.slider("连续涨跌天数", 2, 8, 3, 1, key="cons_days")
-
-    if st.button("🔍 检测异动", type="primary", use_container_width=True,
-                 key="run_anomalies"):
-        st.cache_data.clear()
-        with st.spinner("正在检测异动（约 3 秒）..."):
-            params = {
-                "gap_threshold": gap_th,
-                "volume_multiplier": vspike_mult,
-                "limit_threshold": limit_th,
-                "consecutive_days": cons_days,
-            }
-            results = _load_anomalies(latest_date, params)
-            st.session_state["anomaly_results"] = results
-
-    if "anomaly_results" not in st.session_state:
-        st.info("点击上方按钮开始检测")
-        return
-
-    results = st.session_state["anomaly_results"]
-    if not results:
-        st.warning("未发现异动信号")
-        return
-
-    # 统计卡片
-    cols = st.columns(len(results))
-    for i, (name, df) in enumerate(results.items()):
-        with cols[i]:
-            up_count = len(df[df.get("direction", "") == "up"]) if "direction" in df.columns else 0
-            down_count = len(df[df.get("direction", "") == "down"]) if "direction" in df.columns else 0
-            delta_str = f"↑{up_count} ↓{down_count}" if up_count or down_count else None
-            st.metric(name, len(df), delta=delta_str)
-
-    # 逐类展示
-    for name, df in results.items():
-        with st.expander(f"{name} ({len(df)} 只)", expanded=True):
-            display = _add_names(df)
-            display = display.rename(columns={
-                "symbol": "代码", "gap_pct": "跳空%", "direction": "方向",
-                "prev_close": "前收", "today_open": "今开",
-                "close": "收盘价", "volume": "成交量",
-                "avg_vol_20d": "20日均量", "vol_ratio": "量比",
-                "pct_change": "涨跌幅%", "streak_length": "连续天数",
-                "cumulative_pct": "累计涨跌%",
-            })
-            st.dataframe(display, use_container_width=True, hide_index=True)
-
-
-# ══════════════════════════════════════════════════
-# Sub-tab 4: DB Industry Rotation
+# Sub-tab 2: DB Industry Rotation
 # ══════════════════════════════════════════════════
 
 @st.cache_data(ttl=86400)
@@ -548,46 +381,8 @@ def _render_industry_rotation():
 
 
 # ══════════════════════════════════════════════════
-# Sub-tab 5: Candlestick Patterns
 # ══════════════════════════════════════════════════
-
-@st.cache_data(ttl=3600)
-def _load_candlestick(date):
-    return scan_all_candlestick_patterns(date)
-
-
-def _render_candlestick():
-    st.subheader("🕯️ K线形态识别")
-
-    latest_date = get_latest_trading_date()
-    if latest_date is None:
-        st.info("数据库暂无数据"); return
-    st.caption(f"扫描日期: {latest_date} — 8种经典蜡烛图形态")
-
-    if st.button("🔍 扫描蜡烛形态", type="primary", use_container_width=True, key="candle_scan"):
-        st.cache_data.clear()
-        with st.spinner("扫描中（约1秒）..."):
-            st.session_state["candle_results"] = _load_candlestick(latest_date)
-
-    if "candle_results" not in st.session_state:
-        st.info("点击扫描按钮检测当日蜡烛形态")
-        return
-
-    results = st.session_state["candle_results"]
-    cols = st.columns(len(results)) if results else []
-    for i, (name, df) in enumerate(results.items()):
-        with cols[i]:
-            st.metric(name, len(df))
-
-    for name, df in results.items():
-        with st.expander(f"{name} ({len(df)} 只)"):
-            display = _add_names(df)
-            display = display.rename(columns={"symbol": "代码", "date": "日期", "close": "收盘"})
-            st.dataframe(display, use_container_width=True, hide_index=True)
-
-
-# ══════════════════════════════════════════════════
-# Sub-tab 6: Enhanced Correlation Tools
+# Sub-tab 3: Enhanced Correlation Tools
 # ══════════════════════════════════════════════════
 
 def _render_correlation():
@@ -1346,13 +1141,10 @@ def render():
     st.title("📊 高级分析")
     st.caption("DuckDB 驱动 — 综合诊断 · 多因子 · 形态 · 异动 · 行业轮动 · 蜡烛 · 相关性 · 批量回测 · 量化信号 · 资金流向")
 
-    sub1, sub2, sub3, sub4, sub5, sub6, sub7, sub8, sub9, sub10 = st.tabs([
+    sub1, sub2, sub3, sub4, sub5, sub6, sub7 = st.tabs([
         "🔬 个股诊断",
         "🎯 多因子排名",
-        "📐 形态扫描",
-        "⚡ 异动检测",
         "🔄 行业轮动",
-        "🕯️ K线形态",
         "🔗 相关性",
         "🚀 批量回测",
         "📡 量化信号",
@@ -1361,11 +1153,10 @@ def render():
 
     with sub1: _render_stock_diagnosis()
     with sub2: _render_factor_ranking()
-    with sub3: _render_pattern_scanning()
-    with sub4: _render_anomaly_detection()
-    with sub5: _render_industry_rotation()
-    with sub6: _render_candlestick()
-    with sub7: _render_correlation()
-    with sub8: _render_batch_backtest()
-    with sub9: _render_quant_signals()
-    with sub10: _render_fund_flow()
+    with sub3: _render_industry_rotation()
+    with sub4: _render_correlation()
+    with sub5: _render_batch_backtest()
+    with sub6: _render_quant_signals()
+    with sub7: _render_fund_flow()
+
+    st.caption("💡 形态扫描、异动检测、K线形态已整合至「📋 选股工作流」中，提供更完整的选股体验")

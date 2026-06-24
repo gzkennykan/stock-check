@@ -335,14 +335,14 @@ if last_run:
 
 # =========================== 主区域 Tab 路由 ===========================
 
-tab_wf, tab_ai, tab1, tab2, tab3, tab_perf, tab_ml, tab4, tab5, tab6, tab7, tab_wl, tab8, tab9, tab10, tab11, tab12, tab13 = st.tabs([
+tab_wf, tab_ai, tab1, tab2, tab3, tab_perf, tab_ml, tab4, tab_sc, tab_lhb, tab_wl, tab5, tab6, tab7, tab8, tab9, tab10 = st.tabs([
     "📋 选股工作流",
     "🤖 AI智能分析",
     "📊 单策略回测", "📋 策略对比", "🔧 参数优化",
     "📈 绩效分析",
     "🧠 ML因子研究",
     "💰 资金排名",
-    "🧠 智能选股", "🐉 强势股", "🔥 值博率",
+    "🧠 智能选股", "🐉 龙虎榜",
     "⭐ 自选股",
     "🧺 组合回测", "🌏 北向&融资", "📊 财务分析", "🏭 市场全景",
     "🗄️ 数据中心", "📊 高级分析",
@@ -356,9 +356,8 @@ from tabs.tab3_optimize import render as render_tab3
 from tabs.tab_performance import render as render_perf
 from tabs.tab_ml import render as render_ml
 from tabs.tab5_market_rank import render as render_tab4
-from tabs.tab8_smart import render as render_tab5
-from tabs.tab9_lhb import render as render_tab6
-from tabs.tab10_upside import render as render_tab7
+from tabs.tab_screener import render as render_sc
+from tabs.tab9_lhb import render as render_lhb
 from tabs.tab_watchlist import render as render_wl
 from tabs.tab11_portfolio import render as render_tab8
 from tabs.tab12_northbound import render as render_tab9
@@ -391,32 +390,29 @@ with tab_ml:
 with tab4:
     render_tab4()
 
-with tab5:
-    render_tab5()
+with tab_sc:
+    render_sc()
 
-with tab6:
-    render_tab6()
-
-with tab7:
-    render_tab7()
+with tab_lhb:
+    render_lhb()
 
 with tab_wl:
     render_wl()
 
-with tab8:
+with tab5:
     render_tab8()
 
-with tab9:
+with tab6:
     render_tab9()
 
-with tab10:
+with tab7:
     render_tab10()
 
-with tab11:
+with tab8:
     render_tab11()
 
-with tab12:
+with tab9:
     render_tab12()
 
-with tab13:
+with tab10:
     render_tab13()

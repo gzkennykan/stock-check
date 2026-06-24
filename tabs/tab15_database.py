@@ -7,7 +7,7 @@ from data.database import (
     get_db_stats, get_stocks_in_db, get_kline, search_kline,
     insert_kline, insert_kline_batch, upsert_stock_info,
     delete_kline, delete_non_target_stocks, get_board_stats,
-    compute_correlation, get_connection,
+    get_connection,
 )
 from data.fetcher import fetch_data, _detect_source
 from data.import_csv import _find_kline_csvs, import_csv_to_db
@@ -400,33 +400,6 @@ def _render_analysis():
         st.info("数据库为空，请先下载数据")
         return
 
-    # 相关性分析
-    st.markdown("##### 相关性矩阵")
-    symbols = df["symbol"].tolist()
-    selected = st.multiselect(
-        "选择股票（建议 3-10 只）",
-        options=symbols,
-        default=symbols[:min(5, len(symbols))],
-        key="corr_select",
-    )
-
-    if selected and len(selected) >= 2:
-        # 获取这些股票的公共日期范围
-        subset = df[df["symbol"].isin(selected)]
-        start = subset["data_start"].max().strftime("%Y-%m-%d")
-        end = subset["data_end"].min().strftime("%Y-%m-%d")
-
-        with st.spinner("计算相关性矩阵..."):
-            corr = compute_correlation(selected, start, end)
-
-        if not corr.empty:
-            st.dataframe(
-                corr.style.background_gradient(cmap="RdYlGn", vmin=-1, vmax=1)
-                .format("{:.3f}"),
-                use_container_width=True,
-            )
-            st.caption(f"基于 {start} ~ {end} 日收益率计算")
-
     # SQL 查询面板
     st.markdown("---")
     st.markdown("##### 🔍 自定义 SQL 查询")
@@ -586,7 +559,7 @@ def render():
     st.caption("本地 DuckDB 数据库 — 高性能历史数据分析引擎")
 
     sub1, sub2, sub3, sub4, sub5, sub6, sub7 = st.tabs([
-        "📊 概览", "📋 股票列表", "🔄 日常同步", "📥 批量下载", "📦 CSV导入", "📡 TDX导入", "📊 分析查询"
+        "📊 概览", "📋 股票列表", "🔄 日常同步", "📥 批量下载", "📦 CSV导入", "📡 TDX导入", "🔍 SQL查询"
     ])
 
     with sub1:

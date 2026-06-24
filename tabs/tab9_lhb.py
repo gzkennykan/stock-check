@@ -19,8 +19,8 @@ def _fmt_zt_time(val):
 
 
 def render():
-    st.title("🐉 强势股")
-    st.caption("龙虎榜 + 涨停板 — 追踪市场最强标的（数据源: 新浪财经 / 东方财富）")
+    st.title("🐉 龙虎榜 & 涨停板")
+    st.caption("追踪市场最强标的 — 龙虎榜席位 + 涨停池分析（数据源: 新浪财经 / 东方财富）")
 
     tab_z1, tab_z2, tab_z3 = st.tabs([
         "🐉 龙虎榜", "📈 涨停板", "💥 炸板监控"
