@@ -14,12 +14,43 @@ from config import DB_PATH
 
 # ────────────────────────── 连接管理 ──────────────────────────
 
+_DB_CONN = None
+
+
+class _SharedConnection:
+    """DuckDB 连接包装器：共享单例，close() 为 no-op"""
+
+    def __init__(self, conn):
+        self._wrapped = conn
+
+    def close(self):
+        pass  # 单例连接，不真正关闭
+
+    def execute(self, sql, params=None):
+        if params is not None:
+            return self._wrapped.execute(sql, params)
+        return self._wrapped.execute(sql)
+
+    def cursor(self):
+        return self._wrapped.cursor()
+
+    def __getattr__(self, name):
+        # 委托所有其他属性到原始连接
+        return getattr(self._wrapped, name)
+
+
 def get_connection(read_only: bool = False):
-    """获取 DuckDB 连接（线程安全，每次调用创建新连接）
-    注意: DuckDB 不允许同一数据库文件混用 read_only=True/False 连接，
-    因此统一使用读写模式打开，忽略 read_only 参数。"""
+    """获取 DuckDB 单例连接（同一进程内共享一个连接，避免锁冲突）
+
+    由于 Streamlit 所有 Tab 在同一个进程中渲染，共享连接是安全的。
+    close() 被重写为 no-op，连接在进程退出时自动释放。"""
+    global _DB_CONN
     import duckdb
-    return duckdb.connect(str(DB_PATH), read_only=False)
+    if _DB_CONN is None:
+        raw = duckdb.connect(str(DB_PATH), read_only=False)
+        raw.execute("PRAGMA threads=2")
+        _DB_CONN = _SharedConnection(raw)
+    return _DB_CONN
 
 
 def _ensure_tables(conn) -> None:
