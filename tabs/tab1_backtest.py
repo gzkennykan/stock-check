@@ -45,6 +45,15 @@ def render():
 
             if data:
                 st.session_state["backtest_data"] = data
+                # 同步到绩效分析 Tab
+                if data.get("equity") is not None:
+                    st.session_state["_last_backtest_result"] = {
+                        "equity_curve": data["equity"],
+                        "trades": data.get("result", {}).get("trades", []),
+                        "symbol": symbol,
+                        "strategy": strategy_name,
+                        "date_range": f"{start_s} ~ {end_s}",
+                    }
                 _store_backtest_meta(symbol, strategy_name, params, start_date, end_date)
                 st.success(f"回测完成 — {symbol} ({start_s} ~ {end_s})")
                 st.rerun()

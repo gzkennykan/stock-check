@@ -266,11 +266,80 @@ else:
 
     st.sidebar.caption("引擎: backtrader")
 
+# ── 定时任务 & 推送（两侧边栏通用） ──
+st.sidebar.markdown("---")
+st.sidebar.subheader("🔔 自动日报")
+
+from scheduler import get_config, save_config, run_now, start_scheduler
+
+sched_cfg = get_config()
+
+# 开关
+if "sched_enabled" not in st.session_state:
+    st.session_state.sched_enabled = sched_cfg.get("enabled", False)
+    st.session_state.sched_started = False
+
+enabled = st.sidebar.toggle(
+    "启用工作日自动选股",
+    value=st.session_state.sched_enabled,
+    key="sched_toggle"
+)
+if enabled != st.session_state.sched_enabled:
+    st.session_state.sched_enabled = enabled
+    sched_cfg["enabled"] = enabled
+    save_config(sched_cfg)
+    if enabled and not st.session_state.sched_started:
+        start_scheduler()
+        st.session_state.sched_started = True
+
+with st.sidebar.expander("⚙️ 推送设置", expanded=False):
+    wechat_url = st.text_input(
+        "企业微信 Webhook",
+        value=sched_cfg.get("wechat_webhook_url", ""),
+        type="password",
+        placeholder="https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=...",
+        key="sched_wechat",
+    )
+    dingtalk_url = st.text_input(
+        "钉钉 Webhook",
+        value=sched_cfg.get("dingtalk_webhook_url", ""),
+        type="password",
+        placeholder="https://oapi.dingtalk.com/robot/send?access_token=...",
+        key="sched_dingtalk",
+    )
+    run_time = st.text_input(
+        "执行时间 (HH:MM)",
+        value=sched_cfg.get("run_time", "09:00"),
+        key="sched_time",
+    )
+    desktop = st.checkbox("桌面通知", value=sched_cfg.get("desktop_notify", True), key="sched_desktop")
+
+    if st.button("💾 保存推送设置", key="sched_save"):
+        sched_cfg["wechat_webhook_url"] = wechat_url
+        sched_cfg["dingtalk_webhook_url"] = dingtalk_url
+        sched_cfg["run_time"] = run_time
+        sched_cfg["desktop_notify"] = desktop
+        save_config(sched_cfg)
+        st.success("已保存")
+
+    if st.button("▶️ 立即运行一次", key="sched_run_now"):
+        with st.spinner("执行中..."):
+            report = run_now()
+        st.success("日报已生成")
+        with st.expander("查看报告"):
+            st.markdown(report)
+
+last_run = sched_cfg.get("last_run", "")
+if last_run:
+    st.sidebar.caption(f"上次执行: {last_run[:16]}")
+
 # =========================== 主区域 Tab 路由 ===========================
 
-tab_wf, tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10, tab11, tab12, tab13 = st.tabs([
+tab_wf, tab_ai, tab1, tab2, tab3, tab_perf, tab4, tab5, tab6, tab7, tab8, tab9, tab10, tab11, tab12, tab13 = st.tabs([
     "📋 选股工作流",
+    "🤖 AI智能分析",
     "📊 单策略回测", "📋 策略对比", "🔧 参数优化",
+    "📈 绩效分析",
     "💰 资金排名",
     "🧠 智能选股", "🐉 强势股", "🔥 值博率",
     "🧺 组合回测", "🌏 北向&融资", "📊 财务分析", "🏭 市场全景",
@@ -278,9 +347,11 @@ tab_wf, tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10, tab11, tab1
 ])
 
 from tabs.tab_workflow import render as render_wf
+from tabs.tab_ai import render as render_ai
 from tabs.tab1_backtest import render as render_tab1
 from tabs.tab2_compare import render as render_tab2
 from tabs.tab3_optimize import render as render_tab3
+from tabs.tab_performance import render as render_perf
 from tabs.tab5_market_rank import render as render_tab4
 from tabs.tab8_smart import render as render_tab5
 from tabs.tab9_lhb import render as render_tab6
@@ -295,6 +366,9 @@ from tabs.tab16_advanced import render as render_tab13
 with tab_wf:
     render_wf()
 
+with tab_ai:
+    render_ai()
+
 with tab1:
     render_tab1()
 
@@ -303,6 +377,9 @@ with tab2:
 
 with tab3:
     render_tab3()
+
+with tab_perf:
+    render_perf()
 
 with tab4:
     render_tab4()
