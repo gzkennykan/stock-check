@@ -144,16 +144,18 @@ def insert_kline(symbol: str, df: pd.DataFrame, source: str = "akshare") -> int:
         write_df = df[["open", "high", "low", "close", "volume"]].copy()
         write_df["symbol"] = symbol
         write_df["source"] = source
-        write_df["trade_date"] = write_df.index  # index 是 date
+        write_df["trade_date"] = write_df.index
         write_df["updated_at"] = datetime.now()
 
-        # DuckDB 原生 upsert: INSERT OR REPLACE
+        # 注册 DataFrame 到 DuckDB（SharedConnection 下需显式注册）
+        conn._wrapped.register("_write_df", write_df)
+
         conn.execute("BEGIN")
         conn.execute("""
             INSERT OR REPLACE INTO daily_kline
                 (symbol, trade_date, open, high, low, close, volume, source, updated_at)
             SELECT symbol, trade_date, open, high, low, close, volume, source, updated_at
-            FROM write_df
+            FROM _write_df
         """)
         conn.execute("COMMIT")
         return len(write_df)
@@ -187,7 +189,8 @@ def insert_kline_batch(records: list[dict]) -> int:
             write_df["source"] = rec.get("source", "akshare")
             write_df["trade_date"] = write_df.index
             write_df["updated_at"] = datetime.now()
-            conn.execute("INSERT OR REPLACE INTO daily_kline BY NAME SELECT * FROM write_df")
+            conn._wrapped.register("_write_df_batch", write_df)
+            conn.execute("INSERT OR REPLACE INTO daily_kline BY NAME SELECT * FROM _write_df_batch")
             total += len(write_df)
     finally:
         conn.close()
