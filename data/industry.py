@@ -9,7 +9,17 @@ _CACHE_DIR = Path(__file__).parent.parent / "data_cache"
 
 
 def fetch_industry_list() -> list[str]:
-    """获取所有行业板块名称列表（同花顺分类）"""
+    """获取所有行业板块名称列表（同花顺分类）— DB优先，API补充"""
+    from data.database import get_industry_stocks_db
+    try:
+        industries = get_industry_stocks_db()
+        if not industries.empty:
+            names = industries["industry_name"].tolist()
+            if names:
+                return sorted(names)
+    except Exception:
+        pass
+    # DB 无数据：从 API 获取
     import akshare as ak
     try:
         df = ak.stock_board_industry_name_ths()
@@ -58,25 +68,60 @@ def fetch_industry_index(industry_name: str, end_date: str = "") -> pd.DataFrame
 
 
 def fetch_industry_spot() -> pd.DataFrame:
-    """获取所有行业板块实时行情（涨跌幅排名）"""
+    """获取所有行业板块实时行情（涨跌幅排名）— DB优先（当天快照），API补充"""
+    from data.database import get_industry_spot, get_industry_spot_latest_date, insert_industry_spot
+    from datetime import date
+    today = date.today().isoformat()
+    # 1) 尝试从 DB 读取今天快照
+    latest = get_industry_spot_latest_date()
+    if latest == today:
+        spot = get_industry_spot(today)
+        if not spot.empty:
+            return spot
+    # 2) DB 无今天数据：从 API 获取
     import akshare as ak
     try:
         df = ak.stock_board_industry_summary_ths()
+        if not df.empty:
+            try:
+                insert_industry_spot(df, today)
+            except Exception:
+                pass
         return df
     except Exception as e:
+        # 3) API 失败 → 退回 DB 缓存（即使不是今天）
+        if latest:
+            return get_industry_spot(latest)
         raise RuntimeError(f"获取行业行情失败: {e}")
 
 
 def fetch_industry_fund_flow() -> pd.DataFrame:
     """
-    获取行业资金流向数据（同花顺源）。
+    获取行业资金流向数据（同花顺源）— DB优先，API补充。
     返回 90 个行业的实时资金流入/流出/净额、涨跌幅等。
     """
+    from data.database import get_industry_spot, get_industry_spot_latest_date, insert_industry_spot
+    from datetime import date
+    today = date.today().isoformat()
+    # 1) DB 优先
+    latest = get_industry_spot_latest_date()
+    if latest == today:
+        spot = get_industry_spot(today)
+        if not spot.empty and "fund_flow" in spot.columns:
+            return spot
+    # 2) API
     import akshare as ak
     try:
         df = ak.stock_fund_flow_industry(symbol="即时")
+        if not df.empty:
+            try:
+                insert_industry_spot(df, today)
+            except Exception:
+                pass
         return df
     except Exception as e:
+        if latest:
+            return get_industry_spot(latest)
         raise RuntimeError(f"获取行业资金流向失败: {e}")
 
 
@@ -119,11 +164,20 @@ def _fetch_industry_stocks_page(code: str, page: int, v_cookie: str) -> list[dic
     r = requests.get(url, headers=headers, timeout=15)
     if r.status_code != 200:
         return []
-    return _parse_page_rows(BeautifulSoup(r.text, "lxml"))
+    return _parse_page_rows(BeautifulSoup(r.content, "lxml", from_encoding="gbk"))
 
 
 def fetch_industry_stocks(industry_name: str) -> pd.DataFrame:
-    """获取某个行业板块的成分股列表（同花顺 10jqka 实时）"""
+    """获取某个行业板块的成分股列表 — DB优先，爬虫补充"""
+    from data.database import get_industry_stocks_db, is_industry_stocks_cached, insert_industry_stocks
+
+    # 1) DB 检查
+    if is_industry_stocks_cached(industry_name):
+        cached = get_industry_stocks_db(industry_name)
+        if not cached.empty:
+            return cached
+
+    # 2) DB 未缓存：从 10jqka 爬取
     import requests
     from bs4 import BeautifulSoup
 
@@ -133,7 +187,6 @@ def fetch_industry_stocks(industry_name: str) -> pd.DataFrame:
 
     v_cookie = _get_ths_v_cookie()
 
-    # 请求第1页以获取总页数
     url = (
         f"https://q.10jqka.com.cn/thshy/detail/board/{code}"
         f"/field/199112/order/desc/page/1/ajax/1/code/{code}"
@@ -146,7 +199,7 @@ def fetch_industry_stocks(industry_name: str) -> pd.DataFrame:
     if r.status_code != 200:
         raise RuntimeError(f"请求失败: HTTP {r.status_code}")
 
-    soup = BeautifulSoup(r.text, "lxml")
+    soup = BeautifulSoup(r.content, "lxml", from_encoding="gbk")
     pager = soup.find("div", class_="m-pager")
     total_pages = 1
     if pager:
@@ -156,15 +209,13 @@ def fetch_industry_stocks(industry_name: str) -> pd.DataFrame:
             if p and p.isdigit():
                 pages.add(int(p))
         if pages:
-            total_pages = min(max(pages), 5)  # 最多5页，服务端分页限制
+            total_pages = min(max(pages), 5)
 
-    # 收集所有页数据
     all_rows = []
     for p in range(1, total_pages + 1):
         if p == 1:
             rows = _parse_page_rows(soup)
         else:
-            # 每页重新生成 v cookie，避免反爬拦截
             v_cookie = _get_ths_v_cookie()
             rows = _fetch_industry_stocks_page(code, p, v_cookie)
         all_rows.extend(rows)
@@ -181,6 +232,19 @@ def fetch_industry_stocks(industry_name: str) -> pd.DataFrame:
         if col in df.columns:
             df[col] = df[col].apply(_parse_unit_value)
             df = df.rename(columns={col: f"{col}(亿)"})
+
+    # 3) 写入 DB 缓存（持久化，减轻同花顺服务器压力）
+    try:
+        records = []
+        for _, row in df.iterrows():
+            rec = {"code": row.get("code", "") or row.get("代码", ""),
+                    "name": row.get("name", "") or row.get("名称", "")}
+            if rec["code"]:
+                records.append(rec)
+        if records:
+            insert_industry_stocks(industry_name, records)
+    except Exception:
+        pass
 
     return df
 

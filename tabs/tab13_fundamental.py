@@ -143,7 +143,7 @@ def render():
             # 雷达图
             st.subheader("关键指标雷达图")
             fig_radar = _plot_financial_radar(data)
-            st.plotly_chart(fig_radar, use_container_width=True, key="fin_radar")
+            st.plotly_chart(fig_radar, width='stretch', key="fin_radar")
 
     # ── Tab 2: 业绩预告 ──
     with tab_f2:
@@ -202,4 +202,4 @@ def render():
                 }
                 </style>
                 """)
-                st.dataframe(fdf.head(100), use_container_width=True, hide_index=True)
+                st.dataframe(fdf.head(100), width='stretch', hide_index=True)

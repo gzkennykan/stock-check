@@ -160,7 +160,7 @@ def render():
     fig.update_yaxes(title_text="净值", row=1, col=1)
     fig.update_yaxes(title_text="回撤 %", row=2, col=1)
 
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width='stretch')
 
     # ══════════════════════════════════════════
     # 3. 月度收益热力图
@@ -199,13 +199,13 @@ def render():
                 xaxis=dict(side="top"),
             )
 
-            st.plotly_chart(fig_heat, use_container_width=True)
+            st.plotly_chart(fig_heat, width='stretch')
 
         # 年度汇总
         if "年度收益%" in monthly.columns:
-            st.dataframe(monthly, use_container_width=True)
+            st.dataframe(monthly, width='stretch')
         else:
-            st.dataframe(monthly, use_container_width=True)
+            st.dataframe(monthly, width='stretch')
 
     # ══════════════════════════════════════════
     # 4. 滚动指标（稳定性分析）
@@ -245,7 +245,7 @@ def render():
             margin=dict(l=20, r=20, t=40, b=20),
         )
 
-        st.plotly_chart(fig_roll, use_container_width=True)
+        st.plotly_chart(fig_roll, width='stretch')
 
     # ══════════════════════════════════════════
     # 5. 交易分布（如有交易数据）
@@ -266,7 +266,7 @@ def render():
                         marker_color=["#FF1744" if "-" in str(x) else "#00C853" for x in dist["pnl_distribution"].index],
                     ))
                     fig_pnl.update_layout(height=300, margin=dict(l=20, r=20, t=20, b=40))
-                    st.plotly_chart(fig_pnl, use_container_width=True)
+                    st.plotly_chart(fig_pnl, width='stretch')
 
             with tc2:
                 if "duration_distribution" in dist and not dist["duration_distribution"].empty:
@@ -277,7 +277,7 @@ def render():
                         marker_color="#42A5F5",
                     ))
                     fig_dur.update_layout(height=300, margin=dict(l=20, r=20, t=20, b=40))
-                    st.plotly_chart(fig_dur, use_container_width=True)
+                    st.plotly_chart(fig_dur, width='stretch')
 
     # ══════════════════════════════════════════
     # 6. 详细指标表
@@ -314,4 +314,4 @@ def render():
                     "数值": f"{v:.2f}" if isinstance(v, float) else str(v),
                 })
 
-        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+        st.dataframe(pd.DataFrame(rows), width='stretch', hide_index=True)

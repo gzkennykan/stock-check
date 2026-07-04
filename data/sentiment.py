@@ -2,15 +2,15 @@
 新闻舆情分析模块
 
 功能:
-  1. 获取个股新闻（AKShare stock_news_em）
+  1. 获取个股新闻/公告（东方财富公告 API）
   2. 情绪打分（规则引擎，无需 LLM API）
   3. 近7日情绪趋势
   4. 重大公告自动识别
 
-数据源: AKShare 东方财富个股新闻
+数据源: 东方财富个股公告 API (np-anotice-stock.eastmoney.com)
 """
 import re
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 from collections import Counter
 
 import pandas as pd
@@ -71,57 +71,125 @@ def _classify_sentiment(score: float) -> str:
 
 def fetch_stock_news(symbol: str, max_pages: int = 3) -> pd.DataFrame:
     """
-    获取个股新闻（东方财富源）。
+    获取个股新闻/公告（东方财富源）— DB优先，API补充。
 
     返回:
         DataFrame: title, content, pub_time, sentiment_score, sentiment_label
 
-    注意: 如果 AKShare API 不可用或限流，返回空 DataFrame。
+    注意: 使用东方财富个股公告 API（np-anotice-stock），
+    避开搜索 API 结果不稳定和 AKShare 的 pandas/pyarrow 正则兼容问题。
+    周末自动使用 DB 缓存（最近 3 天）避免无数据。
     """
+    from data.database import get_stock_news_db, insert_stock_news
+
+    # 周末/节假日：放宽 DB 缓存窗口（最近3天），覆盖周五的数据
+    is_weekend = date.today().weekday() >= 5
+    db_cache_days = 3 if is_weekend else 1
+
+    # 1) DB 优先
     try:
-        import akshare as ak
-        df = ak.stock_news_em(symbol=symbol)
-        if df is None or df.empty:
-            return pd.DataFrame()
+        cached = get_stock_news_db(symbol, n_days=db_cache_days)
+        if not cached.empty:
+            return cached
     except Exception:
-        return pd.DataFrame()
+        pass
 
-    df = df.copy()
-    # 标准化列名
-    col_map = {}
-    for c in df.columns:
-        cl = c.lower()
-        if "title" in cl or "标题" in c:
-            col_map[c] = "title"
-        elif "content" in cl or "内容" in c:
-            col_map[c] = "content"
-        elif "time" in cl or "时间" in c or "date" in cl or "日期" in c:
-            col_map[c] = "pub_time"
-    df = df.rename(columns=col_map)
-
-    # 确保有关键列
-    if "title" not in df.columns:
-        # 尝试用第一列作为标题
-        if len(df.columns) > 0:
-            df["title"] = df.iloc[:, 0].astype(str)
-        else:
-            df["title"] = ""
-
-    # 时间处理
-    if "pub_time" in df.columns:
-        df["pub_time"] = pd.to_datetime(df["pub_time"], errors="coerce")
+    # 2) 直接调用东方财富个股公告 API
+    try:
+        df = _fetch_announcements(symbol)
+        if df is None or df.empty:
+            # 周末回退：查 DB 最近 30 天的缓存
+            try:
+                return get_stock_news_db(symbol, n_days=30)
+            except Exception:
+                return pd.DataFrame()
+    except Exception:
+        try:
+            return get_stock_news_db(symbol, n_days=30)
+        except Exception:
+            return pd.DataFrame()
 
     # 情绪打分
     df["sentiment_score"] = df["title"].apply(_get_sentiment_score)
     df["sentiment_label"] = df["sentiment_score"].apply(_classify_sentiment)
 
-    # 排序
     if "pub_time" in df.columns:
         df = df.sort_values("pub_time", ascending=False)
 
-    # 限制页数
     if len(df) > max_pages * 50:
         df = df.head(max_pages * 50)
+
+    # 3) 写入 DB（下次周末可直接用缓存）
+    try:
+        db_df = df.copy()
+        db_df["symbol"] = symbol
+        if "pub_time" in db_df.columns:
+            db_df["pub_date"] = pd.to_datetime(db_df["pub_time"], errors="coerce").dt.date
+        insert_stock_news(db_df[["symbol", "pub_date", "title", "sentiment_score"]])
+    except Exception:
+        pass
+
+    return df
+
+
+def _fetch_announcements(symbol: str) -> pd.DataFrame | None:
+    """
+    从东方财富个股公告 API 获取公告列表。
+    兼容 pandas 3.0+ / pyarrow 24.x（不使用 str.replace with regex）。
+    """
+    import requests as _requests
+
+    clean_symbol = symbol.strip().zfill(6)
+
+    # 先判断市场前缀
+    if clean_symbol.startswith(("6", "5", "9")):
+        market_code = "1"    # 沪市
+    elif clean_symbol.startswith(("0", "3", "2")):
+        market_code = "0"    # 深市
+    else:
+        market_code = "0"
+
+    url = "https://np-anotice-stock.eastmoney.com/api/security/ann"
+    params = {
+        "sr": -1,
+        "page_size": 50,
+        "page_index": 1,
+        "ann_type": "A",
+        "client_source": "web",
+        "stock_list": f"{clean_symbol},{market_code}",
+    }
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Referer": "https://data.eastmoney.com/",
+    }
+
+    r = _requests.get(url, params=params, headers=headers, timeout=15)
+    if r.status_code != 200:
+        return None
+
+    data = r.json()
+    items = data.get("data", {}).get("list", [])
+    if not items:
+        return None
+
+    rows = []
+    for item in items:
+        title = item.get("title_ch", "") or item.get("title", "")
+        # 拼接栏目名作为补充上下文
+        columns = item.get("columns", [])
+        col_name = columns[0].get("column_name", "") if columns else ""
+        content = f"[{col_name}] {title}" if col_name else title
+
+        rows.append({
+            "title": title,
+            "content": content,
+            "pub_time": item.get("notice_date", ""),
+            "art_code": item.get("art_code", ""),
+        })
+
+    df = pd.DataFrame(rows)
+    if "pub_time" in df.columns:
+        df["pub_time"] = pd.to_datetime(df["pub_time"], errors="coerce")
 
     return df
 

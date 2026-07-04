@@ -259,7 +259,7 @@ def render():
             label_visibility="collapsed",
         )
     with diag_col2:
-        if st.button("🔬 诊断", use_container_width=True, key="wf_quick_diag_btn"):
+        if st.button("🔬 诊断", width='stretch', key="wf_quick_diag_btn"):
             raw = quick_input.strip() if quick_input else ""
             if not raw:
                 st.error("请输入股票代码或名称")
@@ -289,7 +289,7 @@ def render():
     # ── 一键选股按钮 ──
     btn_col1, btn_col2 = st.columns([2, 5])
     with btn_col1:
-        if st.button("🚀 一键自动选股", use_container_width=True, type="primary", key="wf_auto"):
+        if st.button("🚀 一键自动选股", width='stretch', type="primary", key="wf_auto"):
             st.cache_data.clear()
             st.session_state.wf_auto_status = {}
             st.session_state.wf_candidates = set()
@@ -347,7 +347,7 @@ def render():
             })
             st.dataframe(show[[c for c in ["代码", "名称", "最新价", "涨跌幅(%)",
                             "封板时间", "封单(万)", "炸板", "行业"] if c in show.columns]],
-                         use_container_width=True, hide_index=True)
+                         width='stretch', hide_index=True)
             st.caption(f"✅ {len(st.session_state.wf_candidates)} 只进入候选池")
         else:
             st.info("👆 点击「拉取涨停板」开始")
@@ -380,7 +380,7 @@ def render():
                 "_in_overlap": "标记", "code": "代码", "name": "名称",
                 "price": "最新价", "pct_change": "涨跌幅(%)",
             })
-            st.dataframe(show, use_container_width=True, hide_index=True)
+            st.dataframe(show, width='stretch', hide_index=True)
             st.caption("🔥 = 同时出现在涨停池和资金TOP20中")
         else:
             st.info("👆 点击加载资金排名")
@@ -414,7 +414,7 @@ def render():
                             show["名称"] = show["symbol"].map(names).fillna("")
                             cols = [c for c in ["symbol", "名称"] if c in show.columns]
                             show = show[cols]
-                        st.dataframe(show, use_container_width=True, hide_index=True)
+                        st.dataframe(show, width='stretch', hide_index=True)
         else:
             st.info("👆 点击扫描异动")
 
@@ -448,7 +448,7 @@ def render():
                         show = df.head(10).copy()
                         if "symbol" in show.columns:
                             show["名称"] = show["symbol"].map(names).fillna("")
-                        st.dataframe(show, use_container_width=True, hide_index=True)
+                        st.dataframe(show, width='stretch', hide_index=True)
             else:
                 st.info("未发现看涨形态")
         else:
@@ -478,7 +478,7 @@ def render():
                 if isinstance(df, pd.DataFrame) and not df.empty:
                     if any(kw in name for kw in ["金叉", "突破", "volume_breakout"]):
                         with st.expander(f"📈 {name} ({len(df)} 条)", expanded=False):
-                            st.dataframe(df.head(10), use_container_width=True, hide_index=True)
+                            st.dataframe(df.head(10), width='stretch', hide_index=True)
         else:
             st.info("👆 点击扫描技术形态")
 
@@ -507,7 +507,7 @@ def render():
             show["名称"] = show["symbol"].map(names).fillna("")
             if "symbol" in show.columns:
                 show["symbol"] = show["symbol"].astype(str)
-            st.dataframe(show, use_container_width=True, hide_index=True)
+            st.dataframe(show, width='stretch', hide_index=True)
             st.caption(f"✅ 候选池累计: {len(st.session_state.wf_candidates)} 只")
         else:
             st.info("👆 点击计算排名")
@@ -532,7 +532,7 @@ def render():
 
         momentum = st.session_state.get("wf_industry_momentum")
         if momentum is not None and not momentum.empty:
-            st.dataframe(momentum.head(20), use_container_width=True, hide_index=True)
+            st.dataframe(momentum.head(20), width='stretch', hide_index=True)
         else:
             st.info("👆 点击查看行业动量")
 
@@ -572,7 +572,7 @@ def render():
         )
 
         if selected:
-            if st.button("🔬 一键诊断选中股票", use_container_width=True, key="wf_diag"):
+            if st.button("🔬 一键诊断选中股票", width='stretch', key="wf_diag"):
                 st.session_state.wf_diag_targets = selected
                 st.session_state.work_mode = "回测"
                 st.rerun()
@@ -603,7 +603,13 @@ def render():
         return
 
     cand_list = sorted(candidates)
-    if st.button("🔬 对所有候选股执行4维度深度诊断", use_container_width=True, type="primary", key="wf_deep_diag"):
+
+    # 检查是否有点击「诊断选中」触发的目标
+    diag_targets = st.session_state.pop("wf_diag_targets", None)
+    if diag_targets:
+        _run_deep_diagnostics(diag_targets, name_map)
+
+    if st.button("🔬 对所有候选股执行4维度深度诊断", width='stretch', type="primary", key="wf_deep_diag"):
         _run_deep_diagnostics(cand_list, name_map)
 
     # 如果自动选股已完成且候选池有股票，自动触发
@@ -881,7 +887,7 @@ def _run_deep_diagnostics(codes: list, name_map: dict, silent: bool = False):
 
     st.dataframe(
         display,
-        use_container_width=True,
+        width='stretch',
         hide_index=True,
         column_config={
             "综合分": st.column_config.ProgressColumn(

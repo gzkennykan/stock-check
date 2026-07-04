@@ -38,7 +38,7 @@ def render():
             key="wl_add",
         )
     with add_col2:
-        if st.button("➕ 添加", use_container_width=True, key="wl_add_btn"):
+        if st.button("➕ 添加", width='stretch', key="wl_add_btn"):
             if new_code.strip():
                 raw = new_code.strip()
                 name_map = get_stock_name_map()
@@ -78,7 +78,7 @@ def render():
 
     if quotes.empty:
         st.warning("无法获取实时行情，请刷新重试")
-        st.dataframe(wl_df, use_container_width=True, hide_index=True)
+        st.dataframe(wl_df, width='stretch', hide_index=True)
         return
 
     # ── 行情卡片 ──
@@ -152,14 +152,14 @@ def render():
             pass
         return ""
 
-    styled = display.style.applymap(
+    styled = display.style.map(
         _color_pct,
         subset=["涨跌幅(%)"] if "涨跌幅(%)" in display.columns else [],
     )
 
     st.dataframe(
         styled,
-        use_container_width=True,
+        width='stretch',
         hide_index=True,
         column_config={
             "涨跌幅(%)": st.column_config.NumberColumn(format="%.2f%%"),
@@ -183,9 +183,9 @@ def render():
             max_selections=5,
         )
         if selected_for_diag and st.button("🔬 诊断选中", key="wl_diag_btn"):
-            st.session_state.wf_quick_diag_code = selected_for_diag[0]
-            st.session_state.wf_quick_diag_trigger = True
-            st.rerun()
+            # 直接在自选股 Tab 内执行诊断，无需跳转到工作流 Tab
+            from tabs.tab_workflow import _run_deep_diagnostics as _wl_run_diag
+            _wl_run_diag(selected_for_diag, get_stock_name_map())
 
     with op_col2:
         # 移除自选

@@ -15,12 +15,28 @@ _NB_FLOW_CACHE = _CACHE_DIR / "northbound_flow.csv"
 
 def fetch_northbound_flow(start_date: str = None, end_date: str = None) -> pd.DataFrame:
     """
-    获取北向资金每日总成交额历史数据（亿元）。
+    获取北向资金每日总成交额历史数据（亿元）— DB优先，API补充。
 
     返回 DataFrame，日期索引，含 deal_amt（总成交额，亿）。
     注：每日净买入/净卖出数据已于2024年8月停止披露，不再返回。
-    失败时返回缓存数据（如有）。
     """
+    from data.database import get_northbound_flow_db, insert_northbound_flow
+
+    # 1) DB 优先
+    try:
+        cached = get_northbound_flow_db(n_days=2000)
+        if not cached.empty:
+            if "trade_date" in cached.columns:
+                cached = cached.set_index("trade_date").sort_index()
+            if start_date:
+                cached = cached.loc[cached.index >= start_date]
+            if end_date:
+                cached = cached.loc[cached.index <= end_date]
+            return cached
+    except Exception:
+        pass
+
+    # 2) API
     try:
         url = "https://datacenter-web.eastmoney.com/api/data/v1/get"
         all_records = []
@@ -42,15 +58,15 @@ def fetch_northbound_flow(start_date: str = None, end_date: str = None) -> pd.Da
             data = r.json()
             if not data.get("success"):
                 break
-            result = data["result"]
-            if result is None:
+            r_data = data["result"]
+            if r_data is None:
                 break
-            records = result.get("data") or []
+            records = r_data.get("data") or []
             all_records.extend(records)
-            if page >= (result.get("pages") or 1):
+            if page >= (r_data.get("pages") or 1):
                 break
             page += 1
-            time.sleep(random.uniform(0.3, 0.8))  # 分页节流
+            time.sleep(random.uniform(0.3, 0.8))
 
         if not all_records:
             return _load_nb_cache(start_date, end_date)
@@ -58,13 +74,17 @@ def fetch_northbound_flow(start_date: str = None, end_date: str = None) -> pd.Da
         df = pd.DataFrame(all_records)
         result = pd.DataFrame()
         result["date"] = pd.to_datetime(df["TRADE_DATE"])
-        result["deal_amt"] = pd.to_numeric(df["DEAL_AMT"], errors="coerce") / 10000  # 万元→亿
+        result["deal_amt"] = pd.to_numeric(df["DEAL_AMT"], errors="coerce") / 10000
         result = result.set_index("date").sort_index()
         result = result.dropna(subset=["deal_amt"])
 
-        # 写缓存
-        _CACHE_DIR.mkdir(parents=True, exist_ok=True)
-        result.to_csv(_NB_FLOW_CACHE)
+        # 3) 写入 DB
+        try:
+            db_df = result.reset_index().rename(columns={"date": "trade_date"})
+            db_df["total_buy"] = db_df["deal_amt"]
+            insert_northbound_flow(db_df)
+        except Exception:
+            pass
 
         if start_date:
             result = result.loc[result.index >= start_date]
@@ -78,30 +98,48 @@ def fetch_northbound_flow(start_date: str = None, end_date: str = None) -> pd.Da
 def _load_nb_cache(start_date=None, end_date=None) -> pd.DataFrame:
     """加载北向资金缓存数据"""
     if _NB_FLOW_CACHE.exists():
-        df = pd.read_csv(_NB_FLOW_CACHE, index_col=0, parse_dates=True)
-        df = df.sort_index()
-        if start_date:
-            df = df.loc[df.index >= start_date]
-        if end_date:
-            df = df.loc[df.index <= end_date]
-        return df
+        try:
+            df = pd.read_csv(_NB_FLOW_CACHE, index_col=0, parse_dates=True)
+            df = df.sort_index()
+            if start_date:
+                df = df.loc[df.index >= start_date]
+            if end_date:
+                df = df.loc[df.index <= end_date]
+            return df
+        except Exception:
+            return pd.DataFrame()
     return pd.DataFrame()
 
 
 def fetch_northbound_summary() -> pd.DataFrame:
-    """获取当日北向资金市场汇总（沪股通/深股通分别统计）"""
+    """获取当日北向资金市场汇总（沪股通/深股通分别统计）— DB优先，API补充"""
+    from data.database import get_northbound_flow_db, insert_northbound_flow
+
+    # 1) DB 优先（今天的）
+    try:
+        cached = get_northbound_flow_db(n_days=1)
+        if not cached.empty:
+            return cached
+    except Exception:
+        pass
+
+    # 2) API
     import akshare as ak
     try:
         df = ak.stock_hsgt_fund_flow_summary_em()
         if df is not None and not df.empty:
-            _CACHE_DIR.mkdir(parents=True, exist_ok=True)
-            df.to_csv(_CACHE_DIR / "northbound_summary.csv", index=False)
+            # 写入 DB
+            try:
+                if "date" in df.columns or "trade_date" in df.columns:
+                    insert_northbound_flow(df)
+            except Exception:
+                pass
         return df if df is not None else pd.DataFrame()
     except Exception:
-        cache_file = _CACHE_DIR / "northbound_summary.csv"
-        if cache_file.exists():
-            return pd.read_csv(cache_file)
-        return pd.DataFrame()
+        try:
+            return get_northbound_flow_db(n_days=1)
+        except Exception:
+            return pd.DataFrame()
 
 
 @retry(times=2, delay=1.0)

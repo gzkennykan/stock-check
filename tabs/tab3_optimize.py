@@ -156,7 +156,7 @@ def render():
         trials_df = study.trials_dataframe()
         param_names = [p["name"] for p in param_defs]
         fig_opt = plot_optimization_history(trials_df, param_names)
-        st.plotly_chart(fig_opt, use_container_width=True)
+        st.plotly_chart(fig_opt, width='stretch')
 
         st.subheader("最优参数组合")
         best_cols = st.columns(len(study.best_params))
@@ -166,4 +166,4 @@ def render():
                 display_val = f"{v:.2f}" if isinstance(v, float) else str(v)
                 st.metric(label, display_val)
 
-        st.dataframe(trials_df.head(10), use_container_width=True, hide_index=True)
+        st.dataframe(trials_df.head(10), width='stretch', hide_index=True)

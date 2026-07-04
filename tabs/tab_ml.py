@@ -7,7 +7,7 @@ from data.ml_factors import (
     compute_all_factors, compute_factor_ic, compute_factor_correlation,
     train_lightgbm_ranker, stratified_backtest,
 )
-from data.database import get_latest_trading_date
+from data.database import today_or_latest_trading_day
 
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
@@ -22,7 +22,7 @@ def render():
     with col1:
         end_date = st.date_input(
             "分析日期",
-            value=pd.to_datetime(get_latest_trading_date() or "2025-01-01"),
+            value=pd.to_datetime(today_or_latest_trading_day()),
             key="ml_date",
         )
     with col2:
@@ -35,7 +35,7 @@ def render():
         st.session_state.ml_factors_df = None
         st.session_state.ml_factor_cols = None
 
-    if st.button("📊 加载/刷新因子数据", use_container_width=True, type="primary", key="ml_load"):
+    if st.button("📊 加载/刷新因子数据", width='stretch', type="primary", key="ml_load"):
         with st.spinner("计算全市场20+因子（约需10-20秒）..."):
             df = compute_all_factors(end_str)
         if df.empty:
@@ -101,9 +101,9 @@ def render():
                         title=f"因子 IC 柱状图 ({ic_col})",
                         height=400, margin=dict(l=20, r=20, t=40, b=80),
                     )
-                    st.plotly_chart(fig, use_container_width=True)
+                    st.plotly_chart(fig, width='stretch')
 
-                st.dataframe(ic_df, use_container_width=True, hide_index=True)
+                st.dataframe(ic_df, width='stretch', hide_index=True)
                 st.caption("💡 IC_IR > 0.5 = 良好，IC_IR > 1.0 = 优秀")
 
     # ══════════════════════════════════════════
@@ -143,7 +143,7 @@ def render():
                 fig.update_layout(
                     height=500, margin=dict(l=20, r=20, t=20, b=80),
                 )
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, width='stretch')
 
                 # 高相关性对
                 high_corr = []
@@ -156,7 +156,7 @@ def render():
                             })
                 if high_corr:
                     st.warning(f"⚠️ 发现 {len(high_corr)} 对高相关因子(>0.7)，建议合并")
-                    st.dataframe(pd.DataFrame(high_corr), use_container_width=True, hide_index=True)
+                    st.dataframe(pd.DataFrame(high_corr), width='stretch', hide_index=True)
 
     # ══════════════════════════════════════════
     # Tab 3: LightGBM 排序模型
@@ -200,8 +200,8 @@ def render():
                     title="特征重要性",
                     height=350, margin=dict(l=20, r=20, t=40, b=80),
                 )
-                st.plotly_chart(fig, use_container_width=True)
-                st.dataframe(imp, use_container_width=True, hide_index=True)
+                st.plotly_chart(fig, width='stretch')
+                st.dataframe(imp, width='stretch', hide_index=True)
 
     # ══════════════════════════════════════════
     # Tab 4: 分层回测
@@ -274,7 +274,7 @@ def _render_stratified(strat_df: pd.DataFrame, source_name: str):
 
     fig.update_layout(height=350, showlegend=False,
                       margin=dict(l=20, r=20, t=40, b=20))
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width='stretch')
 
     # 单调性检查
     spread = strat_df.get("_monotonic")
@@ -287,5 +287,5 @@ def _render_stratified(strat_df: pd.DataFrame, source_name: str):
         else:
             st.error(f"❌ 无单调性：Top-Bottom spread = {s:.1f}%（因子无效）")
 
-    st.dataframe(strat_df, use_container_width=True, hide_index=True)
+    st.dataframe(strat_df, width='stretch', hide_index=True)
     st.caption(f"排序因子: {source_name} | 预测周期: 20日")

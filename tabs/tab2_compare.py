@@ -86,15 +86,15 @@ def render():
                 }
             st.subheader("指标对比")
             fig_bar = plot_comparison_chart(chart_data)
-            st.plotly_chart(fig_bar, use_container_width=True)
+            st.plotly_chart(fig_bar, width='stretch')
 
             st.subheader("资金曲线叠加")
             fig_curve = plot_comparison_curves(curves)
-            st.plotly_chart(fig_curve, use_container_width=True)
+            st.plotly_chart(fig_curve, width='stretch')
 
             st.subheader("详细对比")
             display_rows = [{k: v for k, v in r.items() if not k.startswith("_")} for r in rows]
-            st.dataframe(pd.DataFrame(display_rows), use_container_width=True, hide_index=True)
+            st.dataframe(pd.DataFrame(display_rows), width='stretch', hide_index=True)
 
             st.subheader("各策略交易明细")
             for name, r in results.items():
@@ -105,7 +105,7 @@ def render():
                 label = f"{name}（{trade_count} 笔交易）"
                 with st.expander(label, expanded=(trade_count > 0 and trade_count <= 10)):
                     if not td.empty:
-                        st.dataframe(td, use_container_width=True, hide_index=True)
+                        st.dataframe(td, width='stretch', hide_index=True)
                     else:
                         st.caption("该策略在当前周期内无交易记录")
         else:

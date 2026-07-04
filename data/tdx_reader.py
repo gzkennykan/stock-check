@@ -229,11 +229,14 @@ def import_vipdoc_to_db_incremental(vipdoc_root: str | Path,
                                      n_days: int = 5,
                                      progress_callback=None) -> dict:
     """
-    增量同步：每个 .day 文件只读取末尾 N 条记录，跳过已有日期。
+    增量同步：每个 .day 文件只读取末尾 N 条记录，按单只股票各自最新日期过滤。
 
     比全量导入快 100 倍以上（每个文件只读 ~160 字节 vs 全部 37KB）。
+
+    注意：数据库中完全没有数据的股票会自动触发全量导入（而非仅读尾部），
+    确保新加入的股票能获取完整历史。
     """
-    from data.database import insert_kline, get_latest_trading_date
+    from data.database import insert_kline, get_all_latest_dates
 
     all_files = scan_vipdoc(vipdoc_root)
     if symbols:
@@ -244,7 +247,8 @@ def import_vipdoc_to_db_incremental(vipdoc_root: str | Path,
     if not all_files:
         return {"imported": 0, "stocks": [], "errors": ["未找到 .day 文件"]}
 
-    db_latest = get_latest_trading_date()
+    # 一次查询获取所有股票的最新日期（替代 5000+ 次单股查询）
+    stock_date_map = get_all_latest_dates()
 
     result = {"imported": 0, "stocks": [], "errors": [], "skipped": 0}
     total = len(all_files)
@@ -252,17 +256,19 @@ def import_vipdoc_to_db_incremental(vipdoc_root: str | Path,
     for idx, finfo in enumerate(all_files):
         sym = finfo["symbol"]
         try:
-            df = parse_day_file_tail(finfo["path"], n_records=n_days)
-            if df is None or df.empty:
-                result["skipped"] += 1
-                if progress_callback:
-                    progress_callback(idx + 1, total, sym)
-                continue
+            stock_latest = stock_date_map.get(sym)
 
-            # 过滤掉数据库已有的日期
-            if db_latest:
-                df = df[df.index > pd.Timestamp(db_latest)]
-            if df.empty:
+            if stock_latest is None:
+                # 数据库中完全没有该股票数据 → 全量导入
+                df = parse_day_file(finfo["path"])
+            else:
+                # 已有数据 → 增量：只读尾部，过滤已存在的日期
+                # 读取 2 倍 n_days 以覆盖更长的时间缺口
+                df = parse_day_file_tail(finfo["path"], n_records=max(n_days, 10))
+                if df is not None and not df.empty:
+                    df = df[df.index > pd.Timestamp(stock_latest)]
+
+            if df is None or df.empty:
                 result["skipped"] += 1
                 if progress_callback:
                     progress_callback(idx + 1, total, sym)

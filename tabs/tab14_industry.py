@@ -99,11 +99,11 @@ def render():
 
             # 热力图
             fig_bar = _plot_industry_heatmap(spot)
-            st.plotly_chart(fig_bar, use_container_width=True, key="ind_heatmap")
+            st.plotly_chart(fig_bar, width='stretch', key="ind_heatmap")
 
             # 表格
             with st.expander("📋 查看原始数据"):
-                st.dataframe(spot, use_container_width=True, hide_index=True)
+                st.dataframe(spot, width='stretch', hide_index=True)
 
     # ── Tab 2: 行业成分股 ──
     with tab_i2:
@@ -130,7 +130,7 @@ def render():
                 if not isinstance(stocks_data, bool) and hasattr(stocks_data, '__len__'):
                     st.caption(f"「{st.session_state.get('ind_stocks_name', '')}」成分股 — "
                                f"共 {len(stocks_data)} 只")
-                    st.dataframe(stocks_data, use_container_width=True, hide_index=True)
+                    st.dataframe(stocks_data, width='stretch', hide_index=True)
 
     # ══════════════════════════════════════════
     # Tab 3: 市场宽度 ✨
@@ -139,7 +139,7 @@ def render():
         st.subheader("市场宽度仪表盘")
         st.caption("基于全市场 ~5200 只股票的实时统计，感知整体市场温度（数据源: 新浪行情 + 同花顺资金流）")
 
-        if st.button("🔄 刷新市场宽度", use_container_width=True, key="breadth_refresh"):
+        if st.button("🔄 刷新市场宽度", width='stretch', key="breadth_refresh"):
             st.cache_data.clear()
 
         with st.spinner("正在计算市场宽度指标..."):
@@ -287,7 +287,7 @@ def render():
                     xaxis_tickangle=-45,
                     yaxis_title="股票数量",
                 )
-                st.plotly_chart(fig_dist, use_container_width=True)
+                st.plotly_chart(fig_dist, width='stretch')
 
             # ── 市场温度总结 ──
             st.divider()
@@ -353,11 +353,11 @@ def render():
         st.caption("行业 × 涨跌幅/资金流向矩阵 — 一眼看穿市场热点")
 
         spot = _load_industry_spot()
+        # 初始化变量，避免 UnboundLocalError
+        name_col = pct_col = None
         if spot.empty:
             st.info("暂无行业数据")
         else:
-            # 确定列
-            name_col = pct_col = None
             for c in spot.columns:
                 cn = str(c)
                 if "名称" in cn or "name" in cn.lower():
@@ -447,7 +447,7 @@ def render():
                         margin=dict(l=20, r=20, t=20, b=80),
                         xaxis=dict(tickangle=-45, tickfont=dict(size=9)),
                     )
-                    st.plotly_chart(fig, use_container_width=True)
+                    st.plotly_chart(fig, width='stretch')
 
                 # 按板块展开
                 for sec in sectors:
@@ -484,7 +484,7 @@ def render():
             try:
                 stocks = fetch_industry_stocks(selected_industry)
                 if stocks:
-                    st.dataframe(pd.DataFrame(stocks), use_container_width=True, hide_index=True)
+                    st.dataframe(pd.DataFrame(stocks), width='stretch', hide_index=True)
                 else:
                     st.info("该行业暂无成分股数据")
             except Exception as e:

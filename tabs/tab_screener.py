@@ -156,7 +156,7 @@ def _render_upside_mode(combined: pd.DataFrame):
     with col_v2:
         v_topn = st.selectbox("显示数量", [30, 50, 100, 200], index=1, key="up_topn")
     with col_v3:
-        if st.button("🔄 刷新", use_container_width=True, key="up_refresh"):
+        if st.button("🔄 刷新", width='stretch', key="up_refresh"):
             st.cache_data.clear()
 
     v_search = st.text_input("🔍 搜索代码/名称", key="up_search", placeholder="输入代码或名称过滤...")
@@ -197,7 +197,7 @@ def _render_upside_mode(combined: pd.DataFrame):
         display, extra_rename={"upside_score": "值博率", "pe": "PE(市盈率)"},
         drop_after=["main_capital"])
 
-    st.dataframe(display, use_container_width=True, hide_index=True,
+    st.dataframe(display, width='stretch', hide_index=True,
         column_config={
             "涨跌幅(%)": st.column_config.NumberColumn(format="%.2f%%"),
             "值博率": st.column_config.ProgressColumn(format="%d", min_value=0, max_value=100),
@@ -247,7 +247,7 @@ def _render_result_table(result: pd.DataFrame):
             "roe", "gross_margin", "net_margin", "revenue_yoy", "profit_yoy", "debt_ratio"]
     display = display[[c for c in display.columns if c not in drop]]
 
-    st.dataframe(display, use_container_width=True, hide_index=True,
+    st.dataframe(display, width='stretch', hide_index=True,
         column_config={
             "涨跌幅(%)": st.column_config.NumberColumn(format="%.2f%%"),
             "代码": st.column_config.TextColumn(width="small"),
@@ -270,7 +270,7 @@ def render():
     if "sc_combined" not in st.session_state:
         st.session_state.sc_combined = None
 
-    if st.button("🔄 加载/刷新数据", use_container_width=True, key="sc_load"):
+    if st.button("🔄 加载/刷新数据", width='stretch', key="sc_load"):
         st.cache_data.clear()
         with st.spinner("加载全市场数据..."):
             try:

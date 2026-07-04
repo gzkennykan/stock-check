@@ -7,7 +7,7 @@ from data.database import (
     get_db_stats, get_stocks_in_db, get_kline, search_kline,
     insert_kline, insert_kline_batch, upsert_stock_info,
     delete_kline, delete_non_target_stocks, get_board_stats,
-    get_connection,
+    get_connection, today_or_latest_trading_day,
 )
 from data.fetcher import fetch_data, _detect_source
 from data.import_csv import _find_kline_csvs, import_csv_to_db
@@ -71,7 +71,7 @@ def _render_stock_list():
 
     st.dataframe(
         display,
-        use_container_width=True,
+        width='stretch',
         hide_index=True,
         column_config={
             "代码": st.column_config.TextColumn(width="small"),
@@ -94,7 +94,7 @@ def _render_download():
         )
     with col2:
         start_date = st.date_input("起始日期", value=datetime(2023, 1, 1))
-        end_date = st.date_input("结束日期", value=datetime.today())
+        end_date = st.date_input("结束日期", value=pd.to_datetime(today_or_latest_trading_day()))
 
     # 解析代码
     symbols = []
@@ -110,7 +110,7 @@ def _render_download():
                    + ("..." if len(symbols) > 10 else ""))
 
     if st.button("⬇️ 开始下载", type="primary", disabled=not symbols,
-                 use_container_width=True):
+                 width='stretch'):
         progress = st.progress(0)
         status = st.empty()
         results = {"success": 0, "fail": 0, "rows": 0, "errors": []}
@@ -178,14 +178,14 @@ def _render_csv_import():
     if file_info:
         st.dataframe(
             pd.DataFrame(file_info),
-            use_container_width=True,
+            width='stretch',
             hide_index=True,
         )
         st.caption(f"共 {len(file_info)} 个 CSV 文件（✅=已在库中, ❌=待导入）")
 
     col1, col2 = st.columns(2)
     with col1:
-        if st.button("📥 导入全部 CSV", use_container_width=True):
+        if st.button("📥 导入全部 CSV", width='stretch'):
             with st.spinner("导入中..."):
                 result = import_csv_to_db(dry_run=False)
             st.success(f"导入完成: {result['imported']} 行 ({len(result['stocks'])} 只股票)")
@@ -195,7 +195,7 @@ def _render_csv_import():
             st.rerun()
 
     with col2:
-        if st.button("🔍 预览（不写入）", use_container_width=True, key="csv_preview_btn"):
+        if st.button("🔍 预览（不写入）", width='stretch', key="csv_preview_btn"):
             result = import_csv_to_db(dry_run=True)
             st.info(f"预览: {len(result['stocks'])} 只股票, "
                     f"{sum(s['rows'] for s in result['stocks'])} 行")
@@ -227,7 +227,7 @@ def _render_tdx_import():
         )
     with col_scan:
         st.caption("")  # 对齐占位
-        scan_clicked = st.button("🔍 扫描", use_container_width=True,
+        scan_clicked = st.button("🔍 扫描", width='stretch',
                                  disabled=not vipdoc_path)
 
     if not vipdoc_path:
@@ -298,12 +298,12 @@ def _render_tdx_import():
             "预估行数": f["estimated_rows"],
             "状态": "✅ 已在库" if f["symbol"] in existing_symbols else "🆕 新股票",
         } for f in day_files])
-        st.dataframe(file_df, use_container_width=True, hide_index=True)
+        st.dataframe(file_df, width='stretch', hide_index=True)
 
     # 导入按钮
     col_act1, col_act2, col_act3 = st.columns(3)
     with col_act1:
-        if st.button("⚡ 增量同步（秒级）", type="primary", use_container_width=True,
+        if st.button("⚡ 增量同步（秒级）", type="primary", width='stretch',
                      help="只读取每个文件末尾最新记录，仅导入新增日期"):
             with st.spinner("增量同步中..."):
                 progress = st.progress(0)
@@ -331,7 +331,7 @@ def _render_tdx_import():
             st.rerun()
 
     with col_act2:
-        if st.button("📥 全量导入（较慢）", use_container_width=True,
+        if st.button("📥 全量导入（较慢）", width='stretch',
                      help="重新解析全部历史数据，适合首次导入或数据修复"):
             with st.spinner("全量导入中..."):
                 progress = st.progress(0)
@@ -359,7 +359,7 @@ def _render_tdx_import():
             st.rerun()
 
     with col_act3:
-        if st.button("🔍 预览（不写入）", use_container_width=True, key="tdx_preview_btn"):
+        if st.button("🔍 预览（不写入）", width='stretch', key="tdx_preview_btn"):
             from data.tdx_reader import parse_day_file
 
             preview = []
@@ -384,7 +384,7 @@ def _render_tdx_import():
             if preview:
                 st.dataframe(
                     pd.DataFrame(preview),
-                    use_container_width=True,
+                    width='stretch',
                     hide_index=True,
                 )
             else:
@@ -419,7 +419,7 @@ def _render_analysis():
             conn = get_connection(read_only=True)
             result = conn.execute(sql).df()
             conn.close()
-            st.dataframe(result, use_container_width=True, hide_index=True)
+            st.dataframe(result, width='stretch', hide_index=True)
             st.caption(f"返回 {len(result)} 行")
         except Exception as e:
             st.error(f"查询错误: {e}")
@@ -440,7 +440,7 @@ def _render_sync():
     with col2:
         st.metric("最新数据日期", latest_date or "无")
     with col3:
-        today = datetime.now().strftime("%Y-%m-%d")
+        today = today_or_latest_trading_day()
         need_sync = latest_date and latest_date < today
         st.metric("是否需要同步", "✅ 需要" if need_sync else "✅ 已最新")
 
@@ -451,7 +451,7 @@ def _render_sync():
         st.markdown("**方式一：AKShare 在线同步（收盘后）**")
         st.caption("用 AKShare 拉取最新交易日数据。每只股票约 0.15 秒，9253 只需约 23 分钟。")
     with col_b:
-        if st.button("🔄 一键同步最新", type="primary", use_container_width=True, key="sync_btn"):
+        if st.button("🔄 一键同步最新", type="primary", width='stretch', key="sync_btn"):
             with st.spinner("正在同步最新交易日数据（这可能需要几分钟）..."):
                 progress = st.progress(0)
                 status = st.empty()
@@ -483,7 +483,7 @@ def _render_sync():
         default_tdx = str(detected_path) if detected_path else "C:/zd_zxzq_gm/vipdoc"
         tdx_path = st.text_input("vipdoc 路径", value=default_tdx,
                                   key="sync_tdx_path", label_visibility="collapsed")
-    if st.button("📡 从券商客户端同步", use_container_width=True, key="sync_tdx_btn"):
+    if st.button("📡 从券商客户端同步", width='stretch', key="sync_tdx_btn"):
         with st.spinner("正在从券商客户端导入..."):
             result = sync_from_tdx(tdx_path if Path(tdx_path).exists() else None)
             st.toast(f"导入 {result['imported']} 行 ({len(result.get('stocks', []))} 只)")

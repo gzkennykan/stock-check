@@ -218,61 +218,86 @@ def _fetch_zt_previous(date: str) -> pd.DataFrame:
 
 
 def get_zt_pool(date: str | None = None, force_refresh: bool = False) -> pd.DataFrame:
-    """获取涨停板池（缓存5分钟）"""
+    """获取涨停板池 — DB优先，API补充"""
+    from data.database import get_zt_pool_db, insert_zt_pool
+
     if date is None:
         date = _today_str()
 
-    _CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    if not force_refresh and _is_cache_fresh(_ZT_CACHE_FILE):
-        cached = pd.read_csv(_ZT_CACHE_FILE, dtype={"code": str})
-        if "date" in cached.columns and str(cached["date"].iloc[0]) == date:
+    # 1) DB 优先
+    if not force_refresh:
+        cached = get_zt_pool_db(trade_date=date, pool_type="zt")
+        if not cached.empty:
             return cached
 
+    # 2) API
     df = _fetch_zt_pool(date)
     if not df.empty:
         df["date"] = date
-        df.to_csv(_ZT_CACHE_FILE, index=False)
+        try:
+            insert_zt_pool(df, date, "zt")
+        except Exception:
+            pass
     return df
 
 
 def get_zt_strong(force_refresh: bool = False) -> pd.DataFrame:
-    """获取强势股池（连续涨停，缓存5分钟）"""
-    _CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    if not force_refresh and _is_cache_fresh(_ZT_STRONG_CACHE):
-        return pd.read_csv(_ZT_STRONG_CACHE, dtype={"code": str})
+    """获取强势股池（连续涨停）— DB优先，API补充"""
+    from data.database import get_zt_pool_db, insert_zt_pool
+
+    date = _today_str()
+    if not force_refresh:
+        cached = get_zt_pool_db(trade_date=date, pool_type="strong")
+        if not cached.empty:
+            return cached
 
     df = _fetch_zt_strong()
     if not df.empty:
-        df.to_csv(_ZT_STRONG_CACHE, index=False)
+        try:
+            insert_zt_pool(df, date, "strong")
+        except Exception:
+            pass
     return df
 
 
 def get_zt_broken(force_refresh: bool = False) -> pd.DataFrame:
-    """获取炸板股池（缓存5分钟）"""
-    _CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    if not force_refresh and _is_cache_fresh(_ZT_BROKEN_CACHE):
-        return pd.read_csv(_ZT_BROKEN_CACHE, dtype={"code": str})
+    """获取炸板股池 — DB优先，API补充"""
+    from data.database import get_zt_pool_db, insert_zt_pool
+
+    date = _today_str()
+    if not force_refresh:
+        cached = get_zt_pool_db(trade_date=date, pool_type="broken")
+        if not cached.empty:
+            return cached
 
     df = _fetch_zt_broken()
     if not df.empty:
-        df.to_csv(_ZT_BROKEN_CACHE, index=False)
+        try:
+            insert_zt_pool(df, date, "broken")
+        except Exception:
+            pass
     return df
 
 
 def get_zt_previous(date: str | None = None, force_refresh: bool = False) -> pd.DataFrame:
-    """获取昨日涨停股今日表现（缓存5分钟）"""
+    """获取昨日涨停股今日表现 — DB优先，API补充"""
+    from data.database import get_zt_pool_db, insert_zt_pool
+
     if date is None:
         date = _today_str()
 
-    _CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    if not force_refresh and _is_cache_fresh(_ZT_PREV_CACHE):
-        cached = pd.read_csv(_ZT_PREV_CACHE, dtype={"code": str})
-        return cached
+    if not force_refresh:
+        cached = get_zt_pool_db(trade_date=date, pool_type="previous")
+        if not cached.empty:
+            return cached
 
     df = _fetch_zt_previous(date)
     if not df.empty:
         df["query_date"] = date
-        df.to_csv(_ZT_PREV_CACHE, index=False)
+        try:
+            insert_zt_pool(df, date, "previous")
+        except Exception:
+            pass
     return df
 
 

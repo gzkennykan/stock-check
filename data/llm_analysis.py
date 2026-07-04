@@ -17,7 +17,7 @@ from typing import Optional
 
 
 # ── LLM 配置 ──
-# 优先级: 环境变量 > config.py 设置 > 默认值
+# 优先级: 环境变量 > 持久化文件 (llm_config.json) > 默认值
 LLM_CONFIG = {
     "provider": os.getenv("LLM_PROVIDER", "deepseek"),  # deepseek | qwen | openai
     "deepseek": {
@@ -40,6 +40,50 @@ LLM_CONFIG = {
 }
 
 
+def _load_llm_config_from_file():
+    """从本地 JSON 文件加载 LLM 配置（静默失败：文件不存在/损坏时忽略）"""
+    from config import LLM_CONFIG_FILE
+    try:
+        if LLM_CONFIG_FILE.exists():
+            with open(LLM_CONFIG_FILE, "r", encoding="utf-8") as f:
+                saved = json.load(f)
+            LLM_CONFIG["provider"] = saved.get("provider", LLM_CONFIG["provider"])
+            for p in ["deepseek", "qwen", "openai"]:
+                if p in saved:
+                    cfg_provider = LLM_CONFIG.get(p, {})
+                    saved_provider = saved[p]
+                    if saved_provider.get("api_key"):
+                        cfg_provider["api_key"] = saved_provider["api_key"]
+                    if saved_provider.get("model"):
+                        cfg_provider["model"] = saved_provider["model"]
+                    if saved_provider.get("base_url"):
+                        cfg_provider["base_url"] = saved_provider["base_url"]
+    except Exception:
+        pass  # 文件损坏，忽略，使用默认值
+
+
+def _save_llm_config_to_file():
+    """将当前 LLM_CONFIG 持久化到本地 JSON 文件（仅保存 api_key/model/base_url）"""
+    from config import LLM_CONFIG_FILE
+    try:
+        payload = {"provider": LLM_CONFIG["provider"]}
+        for p in ["deepseek", "qwen", "openai"]:
+            cfg = LLM_CONFIG.get(p, {})
+            payload[p] = {
+                "api_key": cfg.get("api_key", ""),
+                "model": cfg.get("model", ""),
+                "base_url": cfg.get("base_url", ""),
+            }
+        with open(LLM_CONFIG_FILE, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass  # 写入失败不阻塞使用
+
+
+# 模块加载时自动读取持久化配置
+_load_llm_config_from_file()
+
+
 def get_llm_config() -> dict:
     """获取当前 LLM 配置"""
     provider = LLM_CONFIG["provider"]
@@ -55,17 +99,25 @@ def get_llm_config() -> dict:
 
 
 def set_llm_config(provider: str = None, api_key: str = None,
-                   model: str = None, base_url: str = None):
-    """运行时设置 LLM 配置（存入 session_state 前调用）"""
-    if provider:
+                   model: str = None, base_url: str = None,
+                   persist: bool = True):
+    """运行时设置 LLM 配置（支持清空和跨 provider 切换）
+
+    传入 None 表示不修改该字段，传入空字符串表示清空该字段。
+    同时更新全局 LLM_CONFIG 和当前 provider 的嵌套配置。
+    persist=True 时自动写入本地文件，下次启动自动恢复。
+    """
+    if provider is not None:
         LLM_CONFIG["provider"] = provider
     cfg = LLM_CONFIG.get(LLM_CONFIG["provider"], {})
-    if api_key:
+    if api_key is not None:
         cfg["api_key"] = api_key
-    if model:
+    if model is not None:
         cfg["model"] = model
-    if base_url:
+    if base_url is not None:
         cfg["base_url"] = base_url
+    if persist:
+        _save_llm_config_to_file()
 
 
 def _build_system_prompt() -> str:

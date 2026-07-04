@@ -185,7 +185,7 @@ def render():
     end_s = end_date.strftime("%Y-%m-%d") if end_date else "2025-05-08"
 
     # ── 运行 ──
-    if st.button("🚀 运行组合回测", type="primary", use_container_width=True):
+    if st.button("🚀 运行组合回测", type="primary", width='stretch'):
         with st.spinner(f"获取 {len(selected_symbols)} 只股票数据并回测..."):
             stock_data = {}
             fetch_errors = []
@@ -259,7 +259,7 @@ def render():
         result.individual_equities,
         result.weights,
     )
-    st.plotly_chart(fig1, use_container_width=True)
+    st.plotly_chart(fig1, width='stretch')
 
     # 个股贡献
     col_a, col_b = st.columns(2)
@@ -277,13 +277,13 @@ def render():
                     "加权贡献": f"{r * w:.2%}",
                 })
         if contrib_data:
-            st.dataframe(pd.DataFrame(contrib_data), use_container_width=True, hide_index=True)
+            st.dataframe(pd.DataFrame(contrib_data), width='stretch', hide_index=True)
 
     with col_b:
         if result.corr_matrix is not None and len(result.corr_matrix.columns) >= 2:
             st.subheader("个股相关性矩阵")
             fig_corr = _plot_correlation_heatmap(result.corr_matrix)
-            st.plotly_chart(fig_corr, use_container_width=True)
+            st.plotly_chart(fig_corr, width='stretch')
         else:
             st.info("相关性数据不足")
 
@@ -299,4 +299,4 @@ def render():
     )])
     pie_fig.update_layout(height=350, template="plotly_white",
                           margin=dict(l=20, r=20, t=20, b=20))
-    st.plotly_chart(pie_fig, use_container_width=True)
+    st.plotly_chart(pie_fig, width='stretch')

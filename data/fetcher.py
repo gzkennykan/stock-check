@@ -61,10 +61,21 @@ def _fetch_yfinance(symbol: str, start: str, end: str) -> pd.DataFrame:
 
 def fetch_benchmark(symbol: str, start: str, end: str, use_cache: bool = True) -> pd.DataFrame:
     """
-    获取基准指数日线数据（如沪深300=000300, 中证500=000905）。
+    获取基准指数日线数据（如沪深300=000300, 中证500=000905）— DB优先，API补充。
 
     返回的 DataFrame 包含 close 列，用于计算基准收益率曲线。
     """
+    from data.database import get_kline
+
+    # 1) DB 优先
+    if use_cache:
+        db_data = get_kline(symbol, start, end)
+        if not db_data.empty:
+            df = db_data[["close"]].copy()
+            df = df.sort_index()
+            return df
+
+    # 2) API
     import akshare as ak
     try:
         raw = ak.stock_zh_a_daily(

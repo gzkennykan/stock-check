@@ -24,7 +24,7 @@ def render():
             key="rank_view",
         )
     with col_refresh:
-        refresh = st.button("🔄 刷新数据", use_container_width=True, key="rank_refresh")
+        refresh = st.button("🔄 刷新数据", width='stretch', key="rank_refresh")
     with col_info:
         st.caption(f"数据源: {VIEWS[view]['source']} (DuckDB)")
 
@@ -75,6 +75,6 @@ def render():
         display = format_stock_display(display)
 
     st.dataframe(
-        display, use_container_width=True, hide_index=True,
+        display, width='stretch', hide_index=True,
         column_config={"涨跌幅(%)": st.column_config.NumberColumn(format="%.2f%%")},
     )

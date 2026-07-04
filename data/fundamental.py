@@ -76,10 +76,17 @@ def _parse_sina_abstract(df: pd.DataFrame, symbol: str) -> dict | None:
 
 def fetch_financial_indicators(symbol: str) -> dict | None:
     """
-    获取单只股票的最新财务指标（新浪财经数据源）。
-    遍历报告期从新到旧，取每个指标最近一个非NaN值。
-    银行/非银全行业覆盖，无数据缺失问题。
+    获取单只股票的最新财务指标 — DB优先，API补充。
+    新浪财经数据源，银行/非银全行业覆盖。
     """
+    from data.database import get_latest_financial, insert_financial_data
+
+    # 1) DB 优先
+    cached = get_latest_financial(symbol)
+    if cached:
+        return cached
+
+    # 2) API
     import akshare as ak
     try:
         df = ak.stock_financial_abstract(symbol=symbol)
@@ -89,6 +96,13 @@ def fetch_financial_indicators(symbol: str) -> dict | None:
         result = _parse_sina_abstract(df, symbol)
         if result is None:
             return None
+
+        # 3) 写入 DB（下次秒级返回）
+        try:
+            db_df = pd.DataFrame([result])
+            insert_financial_data(db_df)
+        except Exception:
+            pass
 
         # 股票名称
         try:

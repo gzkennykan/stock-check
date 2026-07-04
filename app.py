@@ -78,23 +78,30 @@ def _startup_tdx_sync():
 
 def _startup_fund_flow_sync():
     """
-    启动时自动抓取当日全市场资金流快照（同花顺源）。
-    每个浏览器会话仅执行一次，约 8 秒（104页分页抓取）。
+    启动时后台抓取当日全市场资金流快照（同花顺源）。
+    使用 daemon 线程不阻塞启动，结果就绪后自动写入 session_state。
     """
+    import threading
+
     if "_ff_startup_sync_done" in st.session_state:
         return
     st.session_state._ff_startup_sync_done = True
 
-    from data.fund_flow import sync_fund_flow_snapshot
-    try:
-        result = sync_fund_flow_snapshot()
-        st.session_state._ff_startup_result = result
-    except Exception as e:
-        st.session_state._ff_startup_result = {"status": "error", "message": str(e)}
+    def _do_sync():
+        from data.fund_flow import sync_fund_flow_snapshot
+        try:
+            result = sync_fund_flow_snapshot()
+            st.session_state._ff_startup_result = result
+        except Exception as e:
+            st.session_state._ff_startup_result = {"status": "error", "message": str(e)}
+
+    t = threading.Thread(target=_do_sync, daemon=True)
+    t.start()
 
 
 _startup_tdx_sync()
-_startup_fund_flow_sync()
+# 资金流同步改为懒加载：仅在用户首次访问需要资金流数据的页面时触发
+# 避免 AKShare 同花顺接口慢/卡死阻塞启动
 
 
 STRATEGY_MAP = {
@@ -142,7 +149,7 @@ if st.session_state.work_mode == "回测":
     cols = st.sidebar.columns(5)
     for i, (name, code) in enumerate(HOT_STOCKS.items()):
         with cols[i]:
-            if st.button(name, key=f"hot_{code}", use_container_width=True):
+            if st.button(name, key=f"hot_{code}", width='stretch'):
                 st.session_state["symbol"] = code
 
     symbol = st.sidebar.text_input(
@@ -208,7 +215,7 @@ if st.session_state.work_mode == "回测":
     benchmark = st.sidebar.selectbox("对比基准", ["沪深300", "中证500"], index=0)
     st.session_state["benchmark"] = "000300" if benchmark == "沪深300" else "000905"
 
-    if st.sidebar.button("🚀 运行回测", type="primary", use_container_width=True):
+    if st.sidebar.button("🚀 运行回测", type="primary", width='stretch'):
         st.session_state["run_backtest"] = True
 
     st.sidebar.markdown("---")
@@ -241,7 +248,7 @@ else:
     cols = st.sidebar.columns(5)
     for i, (name, code) in enumerate(HOT_STOCKS.items()):
         with cols[i]:
-            if st.button(name, key=f"hot_mkt_{code}", use_container_width=True):
+            if st.button(name, key=f"hot_mkt_{code}", width='stretch'):
                 st.session_state["symbol"] = code
                 st.session_state.work_mode = "回测"
 

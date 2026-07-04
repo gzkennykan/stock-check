@@ -40,6 +40,10 @@ TDX_VIPDOC_CANDIDATES = [
 TDX_VIPDOC_PATH = None
 
 
+# LLM API 配置持久化文件（不提交到 git）
+LLM_CONFIG_FILE = DATA_DIR / "llm_config.json"
+
+
 def get_tdx_vipdoc_path() -> Path | None:
     """返回通达信 vipdoc 目录路径（手动配置优先，否则自动探测）"""
     if TDX_VIPDOC_PATH:

@@ -11,43 +11,87 @@ from pathlib import Path
 from datetime import datetime
 from config import DB_PATH
 
+# ── DuckDB 1.5.4 兼容：.df() 对空结果可能返回 None ──
+import duckdb
+_original_df = duckdb.DuckDBPyRelation.df
+def _safe_df(self, *args, **kwargs):
+    result = _original_df(self, *args, **kwargs)
+    return result if result is not None else pd.DataFrame()
+duckdb.DuckDBPyRelation.df = _safe_df
+
 
 # ────────────────────────── 连接管理 ──────────────────────────
+
+import atexit
+import sys as _sys
 
 _DB_CONN = None
 
 
 class _SharedConnection:
-    """DuckDB 单例连接包装：close() 为 no-op，其余全部委托原始连接。
+    """DuckDB 单例连接包装。
 
     关键：不定义 execute() —— 让 __getattr__ 返回原始连接的 bound method，
     这样 DuckDB 的 DataFrame 自动注册（依赖 Python 调用栈）不会被包装层打断。
+
+    进程退出时通过 atexit 自动关闭底层连接，确保 WAL 被 checkpoint 且文件锁释放。
     """
 
     def __init__(self, raw):
         self.__dict__["_raw"] = raw
+        self.__dict__["_closed"] = False
 
     def close(self):
-        pass  # 下游代码可安全调用，不真正关闭
+        """下游代码调用 close() 时为 no-op（保持单例存活）。
+        真正的关闭只在 _do_close() 中执行（由 atexit 触发）。"""
+        pass
+
+    def _do_close(self):
+        """真正关闭底层连接——仅由 atexit 调用"""
+        if not self._closed:
+            try:
+                self._raw.close()
+            except Exception:
+                pass
+            self.__dict__["_closed"] = True
 
     def __getattr__(self, name):
         return getattr(self._raw, name)
 
     def __setattr__(self, name, value):
-        if name == "_raw":
-            self.__dict__["_raw"] = value
+        if name in ("_raw", "_closed"):
+            self.__dict__[name] = value
         else:
             setattr(self._raw, name, value)
 
 
+def _cleanup_connection():
+    """atexit 回调：正常关闭 DuckDB 连接，释放文件锁"""
+    global _DB_CONN
+    if _DB_CONN is not None:
+        _DB_CONN._do_close()
+        _DB_CONN = None
+
+
+atexit.register(_cleanup_connection)
+
+
 def get_connection(read_only: bool = False):
-    """获取 DuckDB 单例连接（同一进程内共享，避免多 Tab 锁冲突）"""
+    """获取 DuckDB 单例连接（同一进程内共享，避免多 Tab 锁冲突）。
+
+    始终以读写模式打开，避免 DuckDB 检测到同一文件不同配置而报错。
+    进程退出时通过 atexit 自动 checkpoint + 关闭，确保下次启动不受锁文件影响。
+    """
     global _DB_CONN
     import duckdb
-    if _DB_CONN is None:
-        raw = duckdb.connect(str(DB_PATH), read_only=False)
-        raw.execute("PRAGMA threads=2")
-        _DB_CONN = _SharedConnection(raw)
+
+    if _DB_CONN is not None:
+        return _DB_CONN
+
+    raw = duckdb.connect(str(DB_PATH), read_only=False)
+    raw.execute("PRAGMA threads=2")
+
+    _DB_CONN = _SharedConnection(raw)
     return _DB_CONN
 
 
@@ -114,6 +158,171 @@ def _ensure_tables(conn) -> None:
     """)
     conn.execute("""
         CREATE INDEX IF NOT EXISTS idx_ff_date ON fund_flow_daily(trade_date)
+    """)
+
+    # ── 行业板块实时行情 ──
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS industry_spot (
+            name            VARCHAR(50)  PRIMARY KEY,
+            pct_change      DOUBLE,
+            fund_flow       DOUBLE,
+            turnover        DOUBLE,
+            up_count        INTEGER,
+            down_count      INTEGER,
+            snapshot_date   DATE         NOT NULL,
+            updated_at      TIMESTAMP    DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
+    # ── 行业成分股 ──
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS industry_stocks (
+            industry_name   VARCHAR(100) NOT NULL,
+            symbol          VARCHAR(10)  NOT NULL,
+            stock_name      VARCHAR(50),
+            updated_at      TIMESTAMP    DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (industry_name, symbol)
+        )
+    """)
+
+    # ── 财务指标（按 stock + report_period 唯一） ──
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS financial_data (
+            symbol          VARCHAR(10)  NOT NULL,
+            report_period   VARCHAR(20)  NOT NULL,
+            roe             DOUBLE,
+            roa             DOUBLE,
+            gross_margin    DOUBLE,
+            net_margin      DOUBLE,
+            revenue_yoy     DOUBLE,
+            profit_yoy      DOUBLE,
+            debt_ratio      DOUBLE,
+            eps             DOUBLE,
+            bps             DOUBLE,
+            current_ratio   DOUBLE,
+            quick_ratio     DOUBLE,
+            total_assets    DOUBLE,
+            revenue         DOUBLE,
+            net_profit      DOUBLE,
+            updated_at      TIMESTAMP    DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (symbol, report_period)
+        )
+    """)
+
+    # ── 涨停板池（pool_type: zt/strong/broken/previous） ──
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS zt_pool_daily (
+            symbol          VARCHAR(10)  NOT NULL,
+            trade_date      DATE         NOT NULL,
+            pool_type       VARCHAR(10)  NOT NULL,
+            name            VARCHAR(50),
+            price           DOUBLE,
+            pct_change      DOUBLE,
+            turnover_rate   DOUBLE,
+            industry        VARCHAR(50),
+            seal_fund       DOUBLE,
+            zt_time         VARCHAR(10),
+            break_count     INTEGER,
+            consecutive_days INTEGER,
+            updated_at      TIMESTAMP    DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (symbol, trade_date, pool_type)
+        )
+    """)
+
+    # ── 龙虎榜日数据 ──
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS lhb_daily (
+            symbol          VARCHAR(10)  NOT NULL,
+            trade_date      DATE         NOT NULL,
+            name            VARCHAR(50),
+            close           DOUBLE,
+            pct_change      DOUBLE,
+            turnover        DOUBLE,
+            net_buy         DOUBLE,
+            inst_buy        DOUBLE,
+            inst_sell       DOUBLE,
+            accum_buy       DOUBLE,
+            accum_sell      DOUBLE,
+            buy_seat_count  INTEGER,
+            sell_seat_count INTEGER,
+            onboard_days    INTEGER,
+            reason          VARCHAR(200),
+            updated_at      TIMESTAMP    DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (symbol, trade_date)
+        )
+    """)
+
+    # ── 融资融券 ──
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS margin_data (
+            trade_date      DATE         NOT NULL,
+            market          VARCHAR(10)  NOT NULL,
+            margin_balance  DOUBLE,
+            margin_buy      DOUBLE,
+            short_balance   DOUBLE,
+            short_sell      DOUBLE,
+            net_margin      DOUBLE,
+            updated_at      TIMESTAMP    DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (trade_date, market)
+        )
+    """)
+
+    # ── 北向资金日数据 ──
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS northbound_flow (
+            trade_date      DATE         PRIMARY KEY,
+            total_buy       DOUBLE,
+            total_sell      DOUBLE,
+            net_flow        DOUBLE,
+            sh_buy          DOUBLE,
+            sh_sell         DOUBLE,
+            sz_buy          DOUBLE,
+            sz_sell         DOUBLE,
+            updated_at      TIMESTAMP    DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
+    # ── 盈利能力快照 ──
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS stock_profitability (
+            symbol          VARCHAR(10)  PRIMARY KEY,
+            name            VARCHAR(50),
+            roe             DOUBLE,
+            net_profit_growth DOUBLE,
+            gross_margin    DOUBLE,
+            net_margin      DOUBLE,
+            revenue_growth  DOUBLE,
+            eps             DOUBLE,
+            bps             DOUBLE,
+            report_date     VARCHAR(20),
+            updated_at      TIMESTAMP    DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
+    # ── 股票新闻 ──
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS stock_news (
+            symbol          VARCHAR(10)  NOT NULL,
+            pub_date        DATE         NOT NULL,
+            title           VARCHAR(500),
+            source          VARCHAR(100),
+            sentiment_score DOUBLE,
+            updated_at      TIMESTAMP    DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (symbol, pub_date, title)
+        )
+    """)
+
+    conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_fd_symbol ON financial_data(symbol)
+    """)
+    conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_zt_date ON zt_pool_daily(trade_date)
+    """)
+    conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_lhb_date ON lhb_daily(trade_date)
+    """)
+    conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_is_industry ON industry_stocks(industry_name)
     """)
 
 
@@ -649,6 +858,71 @@ def get_latest_trading_date() -> str | None:
         conn.close()
 
 
+def today_or_latest_trading_day() -> str:
+    """
+    返回今天或最近交易日（用于周末/节假日自动回退）。
+
+    周一至周五：返回今天的日期
+    周六/周日：返回数据库中最近的交易日（通常是周五）
+    如果数据库为空，退回上周五。
+    """
+    from datetime import date, timedelta
+    today = date.today()
+    weekday = today.weekday()  # 0=Mon ... 6=Sun
+
+    if weekday < 5:
+        return today.strftime("%Y-%m-%d")
+
+    # 周末：回退到最近一个交易日
+    latest_db = get_latest_trading_date()
+    if latest_db:
+        return latest_db
+
+    # 数据库为空时退回上周五
+    days_since_friday = weekday - 4  # Sat=5→1, Sun=6→2
+    last_friday = today - timedelta(days=days_since_friday)
+    return last_friday.strftime("%Y-%m-%d")
+
+
+def get_latest_date_for_stock(symbol: str) -> str | None:
+    """获取单只股票在数据库中的最新交易日期，返回 'YYYY-MM-DD'
+
+    与 get_latest_trading_date() 的区别：该函数只查指定 symbol，
+    用于增量同步时按每只股票各自的最新日期判断是否需要导入。
+    """
+    conn = get_connection(read_only=True)
+    try:
+        if not _table_exists(conn, "daily_kline"):
+            return None
+        r = conn.execute(
+            "SELECT MAX(trade_date) FROM daily_kline WHERE symbol = ?", [symbol]
+        ).fetchone()
+        return str(r[0]) if r and r[0] else None
+    finally:
+        conn.close()
+
+
+def get_all_latest_dates() -> dict[str, str]:
+    """批量获取所有股票的最新交易日期，返回 {symbol: 'YYYY-MM-DD'}
+
+    一次 SQL 查询替代数千次单股查询，用于增量同步时内存过滤。
+    """
+    conn = get_connection(read_only=True)
+    try:
+        if not _table_exists(conn, "daily_kline"):
+            return {}
+        df = conn.execute(
+            "SELECT symbol, MAX(trade_date) AS latest FROM daily_kline GROUP BY symbol"
+        ).fetchdf()
+        return {
+            row["symbol"]: str(row["latest"])
+            for _, row in df.iterrows()
+            if row["latest"] is not None
+        }
+    finally:
+        conn.close()
+
+
 def get_trading_date_range(n_back: int) -> tuple[str, str] | tuple[None, None]:
     """
     获取最近 N 个交易日的起止日期。
@@ -694,17 +968,29 @@ def get_all_symbols() -> list[str]:
 
 
 def get_stock_name_map() -> dict[str, str]:
-    """获取数据库中所有有名称的股票代码→名称映射"""
+    """获取数据库中所有有名称的股票代码→名称映射。
+    优先从 stock_info 表，若为空则回退到实时行情缓存（screener）。"""
     conn = get_connection(read_only=True)
     try:
-        if not _table_exists(conn, "stock_info"):
-            return {}
-        r = conn.execute(
-            "SELECT symbol, name FROM stock_info WHERE name IS NOT NULL AND name != ''"
-        ).fetchall()
-        return {row[0]: row[1] for row in r if row[1]}
+        if _table_exists(conn, "stock_info"):
+            r = conn.execute(
+                "SELECT symbol, name FROM stock_info WHERE name IS NOT NULL AND name != ''"
+            ).fetchall()
+            if r:
+                return {row[0]: row[1] for row in r if row[1]}
     finally:
         conn.close()
+
+    # 回退：从 screener 的实时行情 CSV 缓存中获取代码→名称映射
+    try:
+        from .screener import get_stock_list
+        df = get_stock_list()
+        if not df.empty and "code" in df.columns and "name" in df.columns:
+            codes = df["code"].astype(str).str.zfill(6)
+            return dict(zip(codes, df["name"]))
+    except Exception:
+        pass
+    return {}
 
 
 # ══════════════════════════════════════════
@@ -780,3 +1066,475 @@ def compute_correlation(symbols: list[str], start: str, end: str) -> pd.DataFram
     if returns.empty or len(returns) < 10:
         return pd.DataFrame()
     return returns.corr()
+
+
+# ══════════════════════════════════════════════════════════════════
+# 数据策略统一：新增表的 CRUD 函数
+# ══════════════════════════════════════════════════════════════════
+
+# ── 行业板块实时行情 ──
+
+def insert_industry_spot(df: pd.DataFrame, snapshot_date: str) -> int:
+    """将行业实时行情写入 DB（upsert 语义）"""
+    conn = get_connection(read_only=False)
+    try:
+        _ensure_tables(conn)
+        df = df.copy()
+        df["snapshot_date"] = snapshot_date
+        cols = {}
+        for c in df.columns:
+            if "名称" in str(c) or "name" in str(c).lower():
+                cols[c] = "name"
+            elif "涨跌幅" in str(c) or "pct" in str(c).lower():
+                cols[c] = "pct_change"
+            elif "资金" in str(c) or "flow" in str(c).lower():
+                cols[c] = "fund_flow"
+            elif "成交额" in str(c) or "turnover" in str(c).lower():
+                cols[c] = "turnover"
+        df = df.rename(columns=cols)
+        needed = ["name", "snapshot_date"]
+        for c in ["pct_change", "fund_flow", "turnover"]:
+            if c in df.columns:
+                needed.append(c)
+        df = df[[c for c in needed if c in df.columns]]
+        conn.execute("DELETE FROM industry_spot WHERE snapshot_date = ?", [snapshot_date])
+        conn.register("write_df", df)
+        conn.execute("INSERT INTO industry_spot SELECT * FROM write_df")
+        conn.unregister("write_df")
+        return len(df)
+    finally:
+        conn.close()
+
+
+def get_industry_spot(snapshot_date: str = None) -> pd.DataFrame:
+    """从 DB 读取行业实时行情"""
+    conn = get_connection(read_only=True)
+    try:
+        if not _table_exists(conn, "industry_spot"):
+            return pd.DataFrame()
+        if snapshot_date:
+            return conn.execute(
+                "SELECT * FROM industry_spot WHERE snapshot_date = ? ORDER BY pct_change DESC",
+                [snapshot_date]
+            ).df()
+        return conn.execute(
+            "SELECT * FROM industry_spot WHERE snapshot_date = (SELECT MAX(snapshot_date) FROM industry_spot) ORDER BY pct_change DESC"
+        ).df()
+    finally:
+        conn.close()
+
+
+def get_industry_spot_latest_date() -> str | None:
+    """获取行业行情最新快照日期"""
+    conn = get_connection(read_only=True)
+    try:
+        if not _table_exists(conn, "industry_spot"):
+            return None
+        r = conn.execute("SELECT MAX(snapshot_date) FROM industry_spot").fetchone()
+        return str(r[0]) if r and r[0] else None
+    finally:
+        conn.close()
+
+
+# ── 行业成分股 ──
+
+def insert_industry_stocks(industry_name: str, stocks: list[dict]) -> int:
+    """写入某行业成分股列表到 DB"""
+    conn = get_connection(read_only=False)
+    try:
+        _ensure_tables(conn)
+        df = pd.DataFrame(stocks)
+        if df.empty:
+            return 0
+        df["industry_name"] = industry_name
+        if "code" in df.columns and "symbol" not in df.columns:
+            df["symbol"] = df["code"].astype(str).str.strip()
+        if "name" in df.columns and "stock_name" not in df.columns:
+            df["stock_name"] = df["name"].astype(str)
+        cols = ["industry_name", "symbol"]
+        if "stock_name" in df.columns:
+            cols.append("stock_name")
+        df = df[[c for c in cols if c in df.columns]]
+        conn.execute("DELETE FROM industry_stocks WHERE industry_name = ?", [industry_name])
+        conn.register("write_df", df)
+        conn.execute("INSERT INTO industry_stocks SELECT * FROM write_df")
+        conn.unregister("write_df")
+        return len(df)
+    finally:
+        conn.close()
+
+
+def get_industry_stocks_db(industry_name: str = None) -> pd.DataFrame:
+    """从 DB 读取行业成分股。industry_name=None 返回全部行业列表"""
+    conn = get_connection(read_only=True)
+    try:
+        if not _table_exists(conn, "industry_stocks"):
+            return pd.DataFrame()
+        if industry_name:
+            return conn.execute(
+                "SELECT symbol, stock_name, industry_name FROM industry_stocks WHERE industry_name = ?",
+                [industry_name]
+            ).df()
+        return conn.execute(
+            "SELECT DISTINCT industry_name FROM industry_stocks ORDER BY industry_name"
+        ).df()
+    finally:
+        conn.close()
+
+
+def is_industry_stocks_cached(industry_name: str) -> bool:
+    """判断某个行业的成分股是否已缓存"""
+    conn = get_connection(read_only=True)
+    try:
+        if not _table_exists(conn, "industry_stocks"):
+            return False
+        r = conn.execute(
+            "SELECT COUNT(*) FROM industry_stocks WHERE industry_name = ?", [industry_name]
+        ).fetchone()
+        return r[0] > 0 if r else False
+    finally:
+        conn.close()
+
+
+# ── 财务指标 ──
+
+def insert_financial_data(df: pd.DataFrame) -> int:
+    """写入财务指标到 DB（按 symbol + report_period 去重追加）"""
+    conn = get_connection(read_only=False)
+    try:
+        _ensure_tables(conn)
+        if df.empty:
+            return 0
+        rename = {}
+        for c in df.columns:
+            cn = str(c).lower().replace(" ", "_")
+            for std in ["symbol", "report_period", "roe", "roa", "gross_margin",
+                         "net_margin", "revenue_yoy", "profit_yoy", "debt_ratio",
+                         "eps", "bps", "current_ratio", "quick_ratio",
+                         "total_assets", "revenue", "net_profit"]:
+                if cn == std or cn.replace("_", "") == std.replace("_", ""):
+                    rename[c] = std
+                    break
+        df = df.rename(columns=rename)
+        df["symbol"] = df["symbol"].astype(str).str.strip()
+        existing = set(conn.execute("SELECT symbol, report_period FROM financial_data").fetchall())
+        if existing:
+            keys = pd.DataFrame(existing, columns=["symbol", "report_period"])
+            keys["symbol"] = keys["symbol"].astype(str)
+            df = df.merge(keys, on=["symbol", "report_period"], how="left", indicator=True)
+            df = df[df["_merge"] == "left_only"].drop(columns=["_merge"])
+        if df.empty:
+            return 0
+        conn.register("write_df", df)
+        conn.execute("INSERT INTO financial_data SELECT * FROM write_df")
+        conn.unregister("write_df")
+        return len(df)
+    finally:
+        conn.close()
+
+
+def get_financial_data(symbol: str, n_periods: int = 4) -> pd.DataFrame:
+    """从 DB 读取某只股票最近 N 期财务数据"""
+    conn = get_connection(read_only=True)
+    try:
+        if not _table_exists(conn, "financial_data"):
+            return pd.DataFrame()
+        return conn.execute("""
+            SELECT * FROM financial_data
+            WHERE symbol = ?
+            ORDER BY report_period DESC
+            LIMIT ?
+        """, [symbol, n_periods]).df()
+    finally:
+        conn.close()
+
+
+def get_latest_financial(symbol: str) -> dict | None:
+    """获取某只股票最新一期财务数据（返回 dict 方便 get()）"""
+    conn = get_connection(read_only=True)
+    try:
+        if not _table_exists(conn, "financial_data"):
+            return None
+        r = conn.execute(
+            "SELECT * FROM financial_data WHERE symbol = ? ORDER BY report_period DESC LIMIT 1",
+            [symbol]
+        ).fetchone()
+        if r is None:
+            return None
+        cols = [d[0] for d in conn.execute("DESCRIBE financial_data").fetchall()]
+        return dict(zip(cols, r))
+    finally:
+        conn.close()
+
+
+# ── 涨停板池 ──
+
+def insert_zt_pool(df: pd.DataFrame, trade_date: str, pool_type: str) -> int:
+    """写入涨停板池数据（先删当天同类型再插入）"""
+    conn = get_connection(read_only=False)
+    try:
+        _ensure_tables(conn)
+        if df.empty:
+            return 0
+        df = df.copy()
+        df["trade_date"] = pd.to_datetime(trade_date).date()
+        df["pool_type"] = pool_type
+        conn.execute("DELETE FROM zt_pool_daily WHERE trade_date = ? AND pool_type = ?",
+                      [trade_date, pool_type])
+        conn.register("write_df", df)
+        cols = conn.execute("SELECT * FROM zt_pool_daily LIMIT 0").description
+        existing_cols = [d[0] for d in cols]
+        insert_cols = [c for c in df.columns if c in existing_cols]
+        conn.execute(f"INSERT INTO zt_pool_daily ({', '.join(insert_cols)}) SELECT {', '.join(insert_cols)} FROM write_df")
+        conn.unregister("write_df")
+        return len(df)
+    finally:
+        conn.close()
+
+
+def get_zt_pool_db(trade_date: str = None, pool_type: str = None) -> pd.DataFrame:
+    """从 DB 读取涨停板池"""
+    conn = get_connection(read_only=True)
+    try:
+        if not _table_exists(conn, "zt_pool_daily"):
+            return pd.DataFrame()
+        if trade_date is None:
+            r = conn.execute("SELECT MAX(trade_date) FROM zt_pool_daily").fetchone()
+            if r is None or r[0] is None:
+                return pd.DataFrame()
+            trade_date = str(r[0])
+        if pool_type:
+            return conn.execute(
+                "SELECT * FROM zt_pool_daily WHERE trade_date = ? AND pool_type = ? ORDER BY pct_change DESC",
+                [trade_date, pool_type]
+            ).df()
+        return conn.execute(
+            "SELECT * FROM zt_pool_daily WHERE trade_date = ? ORDER BY pool_type, pct_change DESC",
+            [trade_date]
+        ).df()
+    finally:
+        conn.close()
+
+
+# ── 龙虎榜 ──
+
+def insert_lhb_daily(df: pd.DataFrame) -> int:
+    """写入龙虎榜日数据（去重追加）"""
+    conn = get_connection(read_only=False)
+    try:
+        _ensure_tables(conn)
+        if df.empty:
+            return 0
+        existing = set(conn.execute("SELECT symbol, trade_date FROM lhb_daily").fetchall())
+        if existing:
+            keys = pd.DataFrame(existing, columns=["symbol", "trade_date"])
+            keys["symbol"] = keys["symbol"].astype(str)
+            df = df.merge(keys, on=["symbol", "trade_date"], how="left", indicator=True)
+            df = df[df["_merge"] == "left_only"].drop(columns=["_merge"])
+        if df.empty:
+            return 0
+        conn.register("write_df", df)
+        conn.execute("INSERT INTO lhb_daily SELECT * FROM write_df")
+        conn.unregister("write_df")
+        return len(df)
+    finally:
+        conn.close()
+
+
+def get_lhb_daily_db(trade_date: str = None) -> pd.DataFrame:
+    """从 DB 读取龙虎榜日数据"""
+    conn = get_connection(read_only=True)
+    try:
+        if not _table_exists(conn, "lhb_daily"):
+            return pd.DataFrame()
+        if trade_date is None:
+            r = conn.execute("SELECT MAX(trade_date) FROM lhb_daily").fetchone()
+            if r is None or r[0] is None:
+                return pd.DataFrame()
+            trade_date = str(r[0])
+        return conn.execute(
+            "SELECT * FROM lhb_daily WHERE trade_date = ?", [trade_date]
+        ).df()
+    finally:
+        conn.close()
+
+
+# ── 融资融券 ──
+
+def insert_margin_data(df: pd.DataFrame) -> int:
+    """写入融资融券数据（去重追加）"""
+    conn = get_connection(read_only=False)
+    try:
+        _ensure_tables(conn)
+        if df.empty:
+            return 0
+        existing = set(conn.execute("SELECT trade_date, market FROM margin_data").fetchall())
+        if existing:
+            keys = pd.DataFrame(existing, columns=["trade_date", "market"])
+            df = df.merge(keys, on=["trade_date", "market"], how="left", indicator=True)
+            df = df[df["_merge"] == "left_only"].drop(columns=["_merge"])
+        if df.empty:
+            return 0
+        conn.register("write_df", df)
+        conn.execute("INSERT INTO margin_data SELECT * FROM write_df")
+        conn.unregister("write_df")
+        return len(df)
+    finally:
+        conn.close()
+
+
+def get_margin_data_db(market: str = None, n_days: int = 60) -> pd.DataFrame:
+    """从 DB 读取融资融券数据"""
+    conn = get_connection(read_only=True)
+    try:
+        if not _table_exists(conn, "margin_data"):
+            return pd.DataFrame()
+        if market:
+            return conn.execute("""
+                SELECT * FROM margin_data WHERE market = ?
+                ORDER BY trade_date DESC LIMIT ?
+            """, [market, n_days]).df()
+        return conn.execute("""
+            SELECT * FROM margin_data ORDER BY trade_date DESC LIMIT ?
+        """, [n_days]).df()
+    finally:
+        conn.close()
+
+
+def is_margin_cached(date: str = None) -> bool:
+    """判断是否有当天的融资融券数据"""
+    conn = get_connection(read_only=True)
+    try:
+        if not _table_exists(conn, "margin_data"):
+            return False
+        if date is None:
+            date = datetime.now().strftime("%Y-%m-%d")
+        r = conn.execute("SELECT COUNT(*) FROM margin_data WHERE trade_date = ?", [date]).fetchone()
+        return r[0] > 0 if r else False
+    finally:
+        conn.close()
+
+
+# ── 北向资金 ──
+
+def insert_northbound_flow(df: pd.DataFrame) -> int:
+    """写入北向资金日数据（去重追加）"""
+    conn = get_connection(read_only=False)
+    try:
+        _ensure_tables(conn)
+        if df.empty:
+            return 0
+        existing = conn.execute("SELECT trade_date FROM northbound_flow").fetchall()
+        if existing:
+            existing_dates = {str(r[0]) for r in existing}
+            df = df[~df["trade_date"].astype(str).isin(existing_dates)]
+        if df.empty:
+            return 0
+        conn.register("write_df", df)
+        conn.execute("INSERT INTO northbound_flow SELECT * FROM write_df")
+        conn.unregister("write_df")
+        return len(df)
+    finally:
+        conn.close()
+
+
+def get_northbound_flow_db(n_days: int = 200) -> pd.DataFrame:
+    """从 DB 读取北向资金历史"""
+    conn = get_connection(read_only=True)
+    try:
+        if not _table_exists(conn, "northbound_flow"):
+            return pd.DataFrame()
+        return conn.execute(
+            "SELECT * FROM northbound_flow ORDER BY trade_date DESC LIMIT ?", [n_days]
+        ).df()
+    finally:
+        conn.close()
+
+
+# ── 盈利能力快照 ──
+
+def insert_stock_profitability(df: pd.DataFrame) -> int:
+    """写入全市场盈利能力快照（全量替换）"""
+    conn = get_connection(read_only=False)
+    try:
+        _ensure_tables(conn)
+        if df.empty:
+            return 0
+        conn.execute("DELETE FROM stock_profitability")
+        conn.register("write_df", df)
+        cols = conn.execute("SELECT * FROM stock_profitability LIMIT 0").description
+        existing_cols = [d[0] for d in cols]
+        insert_cols = [c for c in df.columns if c in existing_cols]
+        conn.execute(f"INSERT INTO stock_profitability ({', '.join(insert_cols)}) SELECT {', '.join(insert_cols)} FROM write_df")
+        conn.unregister("write_df")
+        return len(df)
+    finally:
+        conn.close()
+
+
+def get_profitability_db() -> pd.DataFrame:
+    """从 DB 读取盈利能力快照"""
+    conn = get_connection(read_only=True)
+    try:
+        if not _table_exists(conn, "stock_profitability"):
+            return pd.DataFrame()
+        return conn.execute("SELECT * FROM stock_profitability").df()
+    finally:
+        conn.close()
+
+
+def is_profitability_fresh(max_age_hours: int = 4) -> bool:
+    """判断盈利能力数据是否仍在有效期内"""
+    conn = get_connection(read_only=True)
+    try:
+        if not _table_exists(conn, "stock_profitability"):
+            return False
+        r = conn.execute("SELECT MAX(updated_at) FROM stock_profitability").fetchone()
+        if r is None or r[0] is None:
+            return False
+        age = (datetime.now() - r[0]).total_seconds() / 3600
+        return age < max_age_hours
+    finally:
+        conn.close()
+
+
+# ── 股票新闻 ──
+
+def insert_stock_news(df: pd.DataFrame) -> int:
+    """写入股票新闻（去重追加）"""
+    conn = get_connection(read_only=False)
+    try:
+        _ensure_tables(conn)
+        if df.empty:
+            return 0
+        existing = set(conn.execute("SELECT symbol, pub_date, title FROM stock_news").fetchall())
+        if existing:
+            keys = pd.DataFrame(existing, columns=["symbol", "pub_date", "title"])
+            keys["symbol"] = keys["symbol"].astype(str)
+            df = df.merge(keys, on=["symbol", "pub_date", "title"], how="left", indicator=True)
+            df = df[df["_merge"] == "left_only"].drop(columns=["_merge"])
+        if df.empty:
+            return 0
+        conn.register("write_df", df)
+        conn.execute("INSERT INTO stock_news SELECT * FROM write_df")
+        conn.unregister("write_df")
+        return len(df)
+    finally:
+        conn.close()
+
+
+def get_stock_news_db(symbol: str, n_days: int = 30) -> pd.DataFrame:
+    """从 DB 读取股票新闻"""
+    conn = get_connection(read_only=True)
+    try:
+        if not _table_exists(conn, "stock_news"):
+            return pd.DataFrame()
+        from datetime import datetime, timedelta
+        cutoff = (datetime.now() - timedelta(days=n_days)).strftime("%Y-%m-%d")
+        return conn.execute("""
+            SELECT * FROM stock_news
+            WHERE symbol = ? AND pub_date >= ?
+            ORDER BY pub_date DESC
+        """, [symbol, cutoff]).df()
+    finally:
+        conn.close()

@@ -196,21 +196,19 @@ def get_lhb_seat_detail(symbol: str, date: str, force_refresh: bool = False) -> 
 
 
 def get_lhb_daily(date: str | None = None, force_refresh: bool = False) -> pd.DataFrame:
-    """获取龙虎榜日榜聚合数据：行情 + 上榜天数 + 机构买卖。按日期缓存"""
+    """获取龙虎榜日榜聚合数据 — DB优先，API补充"""
+    from data.database import get_lhb_daily_db, insert_lhb_daily
+
     if date is None:
         date = _today_str()
 
-    cache_path = _lhb_daily_cache_path(date)
+    # 1) DB 优先
+    if not force_refresh:
+        cached = get_lhb_daily_db(trade_date=date)
+        if not cached.empty:
+            return cached
 
-    if not force_refresh and cache_path.exists():
-        mtime = datetime.fromtimestamp(cache_path.stat().st_mtime)
-        if (datetime.now() - mtime).total_seconds() < get_cache_ttl(5, 30) * 60:
-            df = pd.read_csv(cache_path, dtype={"code": str})
-            if "date" in df.columns:
-                return df
-
-    _LHB_CACHE_DIR.mkdir(parents=True, exist_ok=True)
-
+    # 2) API
     daily = _fetch_lhb_daily_sina(date)
     if daily.empty:
         return pd.DataFrame()
@@ -239,6 +237,11 @@ def get_lhb_daily(date: str | None = None, force_refresh: bool = False) -> pd.Da
             merged[col] = 0
 
     merged["date"] = date
-    merged.to_csv(cache_path, index=False)
-    _cleanup_old_lhb_caches()
+
+    # 3) 写入 DB
+    try:
+        insert_lhb_daily(merged)
+    except Exception:
+        pass
+
     return merged

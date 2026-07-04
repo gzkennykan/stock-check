@@ -8,4 +8,5 @@ venv/
 dist/
 build/
 data_cache/
+data_cache/llm_config.json
 .claude/

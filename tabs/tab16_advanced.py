@@ -4,7 +4,7 @@ import pandas as pd
 import numpy as np
 from datetime import datetime
 
-from data.database import get_latest_trading_date, get_stocks_in_db, get_stock_name_map
+from data.database import get_latest_trading_date, get_stocks_in_db, get_stock_name_map, today_or_latest_trading_day
 from data.factors import compute_composite_ranking
 from data.correlation import (
     compute_full_correlation_matrix, find_low_correlation_pairs,
@@ -83,7 +83,7 @@ def _render_factor_ranking():
         with c5:
             w_dd = st.slider("回撤", 0.0, 1.0, 0.15, 0.05, key="w_dd")
 
-    if st.button("🔍 运行多因子排名", type="primary", use_container_width=True,
+    if st.button("🔍 运行多因子排名", type="primary", width='stretch',
                  key="run_factors"):
         st.cache_data.clear()
         with st.spinner("正在计算全市场因子得分（约 10 秒）..."):
@@ -123,7 +123,7 @@ def _render_factor_ranking():
         margin=dict(l=10, r=10, t=10, b=10),
         xaxis_title="综合得分", yaxis_title="股票数",
     )
-    st.plotly_chart(fig, use_container_width=True, key="factor_dist")
+    st.plotly_chart(fig, width='stretch', key="factor_dist")
 
     # Top 20 柱状图
     top20 = df.head(20).copy()
@@ -146,7 +146,7 @@ def _render_factor_ranking():
         margin=dict(l=10, r=50, t=10, b=10),
         yaxis=dict(autorange="reversed"),
     )
-    st.plotly_chart(fig_top, use_container_width=True, key="factor_top20")
+    st.plotly_chart(fig_top, width='stretch', key="factor_top20")
 
     # 完整排名表
     with st.expander(f"完整排名（{len(df)} 只）"):
@@ -165,7 +165,7 @@ def _render_factor_ranking():
         priority = ["代码", "名称"]
         ordered = [c for c in priority if c in cols] + [c for c in cols if c not in priority]
         display = display[ordered]
-        st.dataframe(display, use_container_width=True, hide_index=True,
+        st.dataframe(display, width='stretch', hide_index=True,
                      column_config={
                          "综合分": st.column_config.ProgressColumn(
                              min_value=0, max_value=100, format="%.0f", width="medium"),
@@ -206,7 +206,7 @@ def _render_industry_rotation():
 
     col_pop, col_info = st.columns([1, 3])
     with col_pop:
-        if st.button("🔄 更新行业分类", use_container_width=True):
+        if st.button("🔄 更新行业分类", width='stretch'):
             with st.spinner("正在获取申万行业分类..."):
                 result = populate_stock_industry()
                 st.toast(f"已更新 {result.get('updated', 0)} 只股票行业信息")
@@ -227,7 +227,7 @@ def _render_industry_rotation():
     st.markdown("### 行业动量排名")
     st.caption(f"基于 {latest_date} 等权行业指数计算")
 
-    if st.button("🔍 计算行业动量", key="run_ind_mom", use_container_width=True):
+    if st.button("🔍 计算行业动量", key="run_ind_mom", width='stretch'):
         st.cache_data.clear()
         with st.spinner("正在计算各行业动量（约 20 秒）..."):
             mom = _load_industry_momentum(latest_date)
@@ -276,7 +276,7 @@ def _render_industry_rotation():
                 xaxis_title="综合动量得分",
             )
             fig.add_vline(x=50, line_dash="dash", line_color="gray", opacity=0.5)
-            st.plotly_chart(fig, use_container_width=True, key="ind_mom_chart")
+            st.plotly_chart(fig, width='stretch', key="ind_mom_chart")
 
             # 完整表格
             with st.expander(f"完整行业排名 ({len(mom)} 个)"):
@@ -286,7 +286,7 @@ def _render_industry_rotation():
                     "ret_5d": "5日%", "ret_10d": "10日%",
                     "ret_20d": "20日%", "ret_60d": "60日%",
                 })
-                st.dataframe(display, use_container_width=True, hide_index=True)
+                st.dataframe(display, width='stretch', hide_index=True)
 
     # ── 行业轮动热力图 ──
     st.markdown("---")
@@ -294,7 +294,7 @@ def _render_industry_rotation():
 
     weeks = st.slider("回溯周数", 4, 26, 12, key="heatmap_weeks")
 
-    if st.button("🔍 生成热力图", key="run_heatmap", use_container_width=True):
+    if st.button("🔍 生成热力图", key="run_heatmap", width='stretch'):
         st.cache_data.clear()
         with st.spinner("正在生成热力图（约 30 秒）..."):
             hm = _load_industry_heatmap(latest_date, weeks)
@@ -327,7 +327,7 @@ def _render_industry_rotation():
                 xaxis_title="周结束日期",
                 yaxis_title="行业",
             )
-            st.plotly_chart(fig, use_container_width=True, key="ind_heatmap_chart")
+            st.plotly_chart(fig, width='stretch', key="ind_heatmap_chart")
 
     # ── 单行业深度分析 ──
     st.markdown("---")
@@ -337,7 +337,7 @@ def _render_industry_rotation():
     with col_sel:
         selected_ind = st.selectbox("选择行业", options=industries, key="ind_deep")
     with col_btn:
-        go_btn = st.button("🔍 分析", use_container_width=True, key="ind_deep_btn")
+        go_btn = st.button("🔍 分析", width='stretch', key="ind_deep_btn")
 
     if go_btn:
         with st.spinner(f"构建「{selected_ind}」行业指数..."):
@@ -372,7 +372,7 @@ def _render_industry_rotation():
             yaxis_title="基准=100",
             hovermode="x unified",
         )
-        st.plotly_chart(fig, use_container_width=True, key="ind_deep_chart")
+        st.plotly_chart(fig, width='stretch', key="ind_deep_chart")
 
         # 成分股列表
         stocks = st.session_state.get("ind_deep_stocks", [])
@@ -409,13 +409,13 @@ def _render_correlation():
         )
     with c2:
         start = st.date_input("起始日期", value=datetime(2025, 1, 1), key="corr_start")
-        end = st.date_input("结束日期", value=datetime.today(), key="corr_end")
+        end = st.date_input("结束日期", value=pd.to_datetime(today_or_latest_trading_day()), key="corr_end")
 
     if len(sel) < 2:
         st.info("请至少选择2只股票")
         return
 
-    if st.button("🔍 计算相关性", use_container_width=True, key="corr_run"):
+    if st.button("🔍 计算相关性", width='stretch', key="corr_run"):
         with st.spinner("计算中..."):
             corr = compute_full_correlation_matrix(sel, start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d"))
             st.session_state["corr_matrix"] = corr
@@ -436,7 +436,7 @@ def _render_correlation():
     )])
     fig.update_layout(height=max(350, len(corr) * 30), template="plotly_white",
                       margin=dict(l=20, r=20, t=10, b=10))
-    st.plotly_chart(fig, use_container_width=True, key="corr_heatmap")
+    st.plotly_chart(fig, width='stretch', key="corr_heatmap")
 
     # 低相关对 & 对冲对
     col_a, col_b = st.columns(2)
@@ -445,13 +445,13 @@ def _render_correlation():
         low = find_low_correlation_pairs(corr, 10)
         if not low.empty:
             st.dataframe(low.rename(columns={"stock_a": "A", "stock_b": "B", "correlation": "相关度"}),
-                         use_container_width=True, hide_index=True)
+                         width='stretch', hide_index=True)
     with col_b:
         st.markdown("**对冲对（负相关>0.3）**")
         hedge = find_hedge_pairs(corr, 10)
         if not hedge.empty:
             st.dataframe(hedge.rename(columns={"stock_a": "A", "stock_b": "B", "correlation": "负相关"}),
-                         use_container_width=True, hide_index=True)
+                         width='stretch', hide_index=True)
 
     # 聚类
     if len(corr) >= 5:
@@ -496,9 +496,9 @@ def _render_batch_backtest():
     with col_s:
         start = st.date_input("起始", datetime(2024, 1, 1), key="bb_start")
     with col_e:
-        end = st.date_input("结束", datetime.today(), key="bb_end")
+        end = st.date_input("结束", pd.to_datetime(today_or_latest_trading_day()), key="bb_end")
 
-    if st.button("🚀 运行批量回测", type="primary", use_container_width=True, key="bb_run"):
+    if st.button("🚀 运行批量回测", type="primary", width='stretch', key="bb_run"):
         cls = strategies_db[strat_name]
         params = {}
         if strat_name == "双均线 (MA Cross)":
@@ -545,14 +545,14 @@ def _render_batch_backtest():
     )])
     fig.add_vline(x=0, line_dash="dash", line_color="gray", opacity=0.5)
     fig.update_layout(height=400, template="plotly_white", margin=dict(l=20, r=50, t=10, b=10))
-    st.plotly_chart(fig, use_container_width=True, key="bb_chart")
+    st.plotly_chart(fig, width='stretch', key="bb_chart")
 
     display = _add_names(r)
     display = display.rename(columns={
         "symbol": "代码", "rank": "排名", "total_return": "总收益%",
         "sharpe": "夏普", "max_dd": "最大回撤%", "win_rate": "胜率%", "trades": "交易数",
     })
-    st.dataframe(display, use_container_width=True, hide_index=True)
+    st.dataframe(display, width='stretch', hide_index=True)
 
 
 # ══════════════════════════════════════════════════
@@ -574,7 +574,7 @@ def _render_quant_signals():
     # ── Part A: 市场择时信号 ──
     st.markdown("### 市场择时信号")
 
-    if st.button("🔍 计算市场宽度", use_container_width=True, key="breadth_run"):
+    if st.button("🔍 计算市场宽度", width='stretch', key="breadth_run"):
         st.cache_data.clear()
         with st.spinner("计算中（~1秒）..."):
             st.session_state["breadth_data"] = _load_breadth(latest_date)
@@ -604,20 +604,20 @@ def _render_quant_signals():
             fig.update_layout(height=300, template="plotly_white",
                               margin=dict(l=10, r=10, t=10, b=10),
                               yaxis_range=[0, 100], yaxis_title="择时信号")
-            st.plotly_chart(fig, use_container_width=True, key="breadth_chart")
+            st.plotly_chart(fig, width='stretch', key="breadth_chart")
 
             # 顶底事件
             events = detect_market_extremes(bd)
             if not events.empty:
                 with st.expander(f"近期顶底信号 ({len(events)} 次)"):
-                    st.dataframe(events, use_container_width=True, hide_index=True)
+                    st.dataframe(events, width='stretch', hide_index=True)
 
     st.markdown("---")
 
     # ── Part B: 因子有效性回测 ──
     st.markdown("### 因子有效性验证")
 
-    if st.button("🔍 验证因子有效性", use_container_width=True, key="btn_factor_bt"):
+    if st.button("🔍 验证因子有效性", width='stretch', key="btn_factor_bt"):
         with st.spinner("计算因子分组收益（约5秒）..."):
             fbt = backtest_factor_returns("composite", latest_date)
             st.session_state["factor_backtest_result"] = fbt
@@ -630,7 +630,7 @@ def _render_quant_signals():
                 "period": "周期", "top": "高分组%", "bottom": "低分组%",
                 "spread": "超额收益%", "factor_valid": "有效",
             })
-            st.dataframe(display, use_container_width=True, hide_index=True)
+            st.dataframe(display, width='stretch', hide_index=True)
             valid_count = fbt["factor_valid"].sum() if "factor_valid" in fbt.columns else 0
             if valid_count > 0:
                 st.success(f"因子在 {valid_count}/{len(fbt)} 个周期有效（高分组合>低分组）")
@@ -662,7 +662,7 @@ def _render_fund_flow():
     with col_c:
         st.write("")
         st.write("")
-        refresh = st.button("🔄 查询", use_container_width=True, key="ff_refresh")
+        refresh = st.button("🔄 查询", width='stretch', key="ff_refresh")
 
     if not code or len(code) < 6:
         st.info("请输入6位股票代码查询个股资金流向（数据源: 同花顺）")
@@ -764,7 +764,7 @@ def _render_fund_flow():
         })
 
         st.dataframe(
-            tbl, use_container_width=True, hide_index=True,
+            tbl, width='stretch', hide_index=True,
             column_config={
                 "涨跌幅(%)": st.column_config.NumberColumn(format="%+.2f%%"),
             },
@@ -814,7 +814,7 @@ def _render_fund_flow():
         fig.update_yaxes(title_text="资金净额(亿元)", secondary_y=False)
         fig.update_yaxes(title_text="收盘价(元)", secondary_y=True)
 
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width='stretch')
 
         # 辅助判断
         last_5 = chart_data.tail(5)
@@ -845,7 +845,7 @@ def _render_stock_diagnosis():
     with col_b:
         st.write("")
         st.write("")
-        if st.button("🔍 开始诊断", use_container_width=True, key="diag_run"):
+        if st.button("🔍 开始诊断", width='stretch', key="diag_run"):
             st.session_state["run_diag"] = True
 
     if not code or len(code) < 6:
@@ -986,7 +986,7 @@ def _render_stock_diagnosis():
                 legend=dict(orientation="h", yanchor="bottom", y=-0.3, xanchor="center", x=0.5),
                 margin=dict(l=40, r=20, t=50, b=70),
             )
-            st.plotly_chart(fig_kl, use_container_width=True)
+            st.plotly_chart(fig_kl, width='stretch')
 
     with chart_t2:
         if df_tech is not None and not df_tech.empty:
@@ -1036,7 +1036,7 @@ def _render_stock_diagnosis():
                 legend=dict(orientation="h", yanchor="bottom", y=-0.25, xanchor="center", x=0.5),
                 margin=dict(l=40, r=20, t=50, b=70),
             )
-            st.plotly_chart(fig_combo, use_container_width=True)
+            st.plotly_chart(fig_combo, width='stretch')
 
     # ═══════════════════════════════
     # Part D: 基本面快照（从 AKShare）

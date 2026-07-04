@@ -6,6 +6,7 @@ from data.northbound import (
     fetch_northbound_flow, fetch_northbound_summary,
     fetch_northbound_individual
 )
+from data.database import today_or_latest_trading_day
 from utils import fmt_yuan
 
 import plotly.graph_objects as go
@@ -78,7 +79,7 @@ def render():
         with col1:
             nb_start = st.date_input("起始日期", value=datetime(2024, 1, 1), key="nb_start")
         with col2:
-            nb_end = st.date_input("结束日期", value=datetime.now(), key="nb_end")
+            nb_end = st.date_input("结束日期", value=pd.to_datetime(today_or_latest_trading_day()), key="nb_end")
 
         if st.button("🔄 刷新数据", key="nb_refresh"):
             st.cache_data.clear()
@@ -107,7 +108,7 @@ def render():
             st.metric("较前日变动", f"{change:+,.0f} 亿")
 
         fig = _plot_northbound_flow(nb_df)
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width='stretch')
 
     # ── Tab 2: 市场汇总 ──
     with tab_nb2:
@@ -141,7 +142,7 @@ def render():
                 "相关指数": "相关指数",
                 "指数涨跌幅": "指数涨跌幅(%)",
             })
-            st.dataframe(display, use_container_width=True, hide_index=True,
+            st.dataframe(display, width='stretch', hide_index=True,
                          column_config={
                              "指数涨跌幅(%)": st.column_config.NumberColumn(format="%.2f"),
                              "成交净买额(亿)": st.column_config.NumberColumn(format="%.2f"),
@@ -214,7 +215,7 @@ def render():
                                   margin=dict(l=20, r=20, t=40, b=20),
                                   legend=dict(orientation="h", yanchor="bottom", y=1.02))
                 fig.update_xaxes(rangeslider_visible=False)
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, width='stretch')
 
                 # 最新持仓摘要
                 latest = ind_df.iloc[-1]
@@ -243,7 +244,7 @@ def render():
                     display_df["收盘价"] = display_df["close"].round(2)
                     st.dataframe(
                         display_df[["持股市值(亿)", "持股数(万股)", "占总股本比(%)", "占流通股比(%)", "机构数", "收盘价"]],
-                        use_container_width=True
+                        width='stretch'
                     )
 
     # ══════════════════════════════════════════
@@ -257,7 +258,7 @@ def render():
         with col_m1:
             margin_days = st.selectbox("查看天数", [30, 60, 90, 120], index=1, key="margin_days")
         with col_m2:
-            refresh_margin = st.button("🔄 刷新两融数据", use_container_width=True, key="refresh_margin")
+            refresh_margin = st.button("🔄 刷新两融数据", width='stretch', key="refresh_margin")
 
         with st.spinner("正在获取融资融券数据..."):
             try:
@@ -348,7 +349,7 @@ def render():
                 legend=dict(orientation="h", yanchor="bottom", y=1.02),
             )
             fig.update_xaxes(rangeslider_visible=False)
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width='stretch')
 
             # ── 融券余额趋势 ──
             if "short_balance_yi" in margin_trend.columns:
@@ -367,7 +368,7 @@ def render():
                     template="plotly_white",
                     margin=dict(l=20, r=20, t=20, b=20),
                 )
-                st.plotly_chart(fig2, use_container_width=True)
+                st.plotly_chart(fig2, width='stretch')
         else:
             st.info("暂无两融数据（联网获取中...）")
 

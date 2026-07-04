@@ -31,7 +31,7 @@ def render():
 
     # ── 触发回测（侧边栏按钮 或 Tab 内按钮） ──
     run_triggered = st.session_state.pop("run_backtest", False)
-    tab_rerun = st.button("🔄 重新运行回测", key="rerun_bt", use_container_width=True)
+    tab_rerun = st.button("🔄 重新运行回测", key="rerun_bt", width='stretch')
 
     if run_triggered or tab_rerun:
         if not symbol or not strategy_cls:
@@ -89,15 +89,15 @@ def render():
     st.subheader("资金曲线 & 回撤")
     fig1 = plot_equity_drawdown(data["equity"], data.get("bm_equity"),
                                 data["benchmark_metrics"].benchmark_name if data.get("benchmark_metrics") else "基准")
-    st.plotly_chart(fig1, use_container_width=True)
+    st.plotly_chart(fig1, width='stretch')
 
     st.subheader("K线图")
     fig2 = plot_kline(data["df"].tail(120))
-    st.plotly_chart(fig2, use_container_width=True)
+    st.plotly_chart(fig2, width='stretch')
 
     st.subheader("交易明细")
     trade_df = get_trade_list(data["result"]["strategy"])
     if not trade_df.empty:
-        st.dataframe(trade_df, use_container_width=True, hide_index=True)
+        st.dataframe(trade_df, width='stretch', hide_index=True)
     else:
         st.info("该时段内无交易记录")

@@ -355,8 +355,13 @@ def screen_stocks(df: pd.DataFrame,
 # ════════════════ 资金流向 & 成交额排行 ════════════════
 
 def get_fund_flow_data(force_refresh: bool = False) -> pd.DataFrame:
-    """获取全市场资金流向数据（从 DuckDB 本地快照，秒级）"""
-    from data.database import get_fund_flow_ranking, get_fund_flow_latest_date
+    """获取全市场资金流向数据（从 DuckDB 本地快照，秒级）
+
+    自动用 kline 最新收盘价替换 fund_flow 快照中的旧价格，
+    确保价格与 K 线数据一致。
+    """
+    from data.database import get_fund_flow_ranking, get_fund_flow_latest_date, get_connection
+
     latest = get_fund_flow_latest_date()
     if latest is None:
         return pd.DataFrame(columns=["code", "name", "price", "pct_change",
@@ -368,6 +373,53 @@ def get_fund_flow_data(force_refresh: bool = False) -> pd.DataFrame:
                                       "main_capital", "capital_inflow",
                                       "capital_outflow", "turnover_rate", "turnover"])
     df = df.rename(columns={"symbol": "code", "main_net": "main_capital"})
+
+    # ── 用 kline 最新收盘价更新 price 和 pct_change ──
+    # 基金流快照的 price 是同花顺抓取时刻的盘中价，不是最新收盘价
+    from data.database import get_latest_trading_date
+    max_date = get_latest_trading_date()  # "YYYY-MM-DD"
+    if max_date:
+        conn = get_connection(read_only=True)
+        try:
+            # 查询全局最新交易日所有股票的收盘价（秒级，按日期索引）
+            kline_df = conn.execute("""
+                SELECT symbol, close AS price
+                FROM daily_kline
+                WHERE trade_date = ?
+            """, [max_date]).df()
+
+            # 查询前一日收盘价用于计算涨跌幅
+            prev_date = conn.execute("""
+                SELECT MAX(trade_date) FROM daily_kline WHERE trade_date < ?
+            """, [max_date]).fetchone()[0]
+            if prev_date:
+                prev_df = conn.execute("""
+                    SELECT symbol, close AS prev_close
+                    FROM daily_kline WHERE trade_date = ?
+                """, [str(prev_date)]).df()
+                kline_df = kline_df.merge(prev_df, on="symbol", how="left")
+                kline_df["pct_change"] = np.nan
+                mask = kline_df["prev_close"].notna() & (kline_df["prev_close"] > 0)
+                kline_df.loc[mask, "pct_change"] = (
+                    (kline_df.loc[mask, "price"] - kline_df.loc[mask, "prev_close"])
+                    / kline_df.loc[mask, "prev_close"] * 100
+                ).round(2)
+            else:
+                kline_df["pct_change"] = np.nan
+
+            if not kline_df.empty:
+                kline_df["code"] = kline_df["symbol"].astype(str)
+                # 用 kline 的 price/pct_change 替换 fund_flow 中的值
+                df = df.drop(columns=["price", "pct_change"], errors="ignore")
+                df = df.merge(
+                    kline_df[["code", "price", "pct_change"]],
+                    on="code", how="left"
+                )
+        except Exception:
+            pass
+        finally:
+            conn.close()
+
     return df
 
 
@@ -492,12 +544,14 @@ def get_combined_data(force_refresh: bool = False) -> pd.DataFrame:
 
 
 def _fetch_profitability_data(force_refresh: bool = False) -> pd.DataFrame:
-    """获取全市场最新季度盈利能力数据（ROE、净利润增长、毛利率）"""
-    if not force_refresh and _PROFIT_CACHE_FILE.exists():
-        age = (datetime.now() - datetime.fromtimestamp(
-            _PROFIT_CACHE_FILE.stat().st_mtime)).total_seconds()
-        if age < get_cache_ttl(240, 480) * 60:
-            return pd.read_csv(_PROFIT_CACHE_FILE, dtype={"code": str})
+    """获取全市场最新季度盈利能力数据（ROE、净利润增长、毛利率）— DB优先，API补充"""
+    from data.database import get_profitability_db, is_profitability_fresh, insert_stock_profitability
+
+    # 1) DB 优先
+    if not force_refresh and is_profitability_fresh(max_age_hours=4):
+        cached = get_profitability_db()
+        if not cached.empty:
+            return cached
 
     import akshare as ak
     import random as _random
@@ -560,6 +614,12 @@ def _fetch_profitability_data(force_refresh: bool = False) -> pd.DataFrame:
     df["code"] = df["code"].astype(str).str.strip().str.zfill(6)
     for c in ["roe", "profit_growth", "gross_margin"]:
         df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0)
+
+    # 写入 DB（CSV 保留向后兼容）
+    try:
+        insert_stock_profitability(df)
+    except Exception:
+        pass
 
     _CACHE_DIR.mkdir(parents=True, exist_ok=True)
     df.to_csv(_PROFIT_CACHE_FILE, index=False)

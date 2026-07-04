@@ -39,7 +39,7 @@ def render():
         with col_lhb2:
             st.write("")
             st.write("")
-            refresh_lhb = st.button("🔄 刷新数据", use_container_width=True, key="refresh_lhb")
+            refresh_lhb = st.button("🔄 刷新数据", width='stretch', key="refresh_lhb")
         with col_lhb3:
             st.write("")
             st.caption("数据每5分钟缓存一次")
@@ -103,7 +103,7 @@ def render():
 
                 st.dataframe(
                     tbl_display[show_cols],
-                    use_container_width=True,
+                    width='stretch',
                     hide_index=True,
                     column_config={
                         "涨跌幅(%)": st.column_config.NumberColumn(format="%.2f%%"),
@@ -148,7 +148,7 @@ def render():
                                 buy_show.columns = ["营业部", "买入(万)", "卖出(万)", "净额(万)"]
                                 for c in ["买入(万)", "卖出(万)", "净额(万)"]:
                                     buy_show[c] = buy_show[c].round(1)
-                                st.dataframe(buy_show, use_container_width=True, hide_index=True)
+                                st.dataframe(buy_show, width='stretch', hide_index=True)
 
                         with c_right:
                             st.markdown("### 🔴 卖出前5席位")
@@ -159,7 +159,7 @@ def render():
                                 sell_show.columns = ["营业部", "买入(万)", "卖出(万)", "净额(万)"]
                                 for c in ["买入(万)", "卖出(万)", "净额(万)"]:
                                     sell_show[c] = sell_show[c].round(1)
-                                st.dataframe(sell_show, use_container_width=True, hide_index=True)
+                                st.dataframe(sell_show, width='stretch', hide_index=True)
 
     # ══════════════════════════════════════════
     # Tab 2: 涨停板分析 ✨
@@ -170,7 +170,7 @@ def render():
 
         col_z1, col_z2 = st.columns([2, 3])
         with col_z1:
-            refresh_zt = st.button("🔄 刷新涨停数据", use_container_width=True, key="refresh_zt")
+            refresh_zt = st.button("🔄 刷新涨停数据", width='stretch', key="refresh_zt")
         with col_z2:
             st.caption("首次加载约需10秒")
 
@@ -266,7 +266,7 @@ def render():
 
                 st.dataframe(
                     show,
-                    use_container_width=True,
+                    width='stretch',
                     hide_index=True,
                     column_config={
                         "涨跌幅(%)": st.column_config.NumberColumn(format="%.2f%%"),
@@ -298,7 +298,7 @@ def render():
                 })
                 st.dataframe(
                     strong_display,
-                    use_container_width=True,
+                    width='stretch',
                     hide_index=True,
                     column_config={
                         "涨跌幅(%)": st.column_config.NumberColumn(format="%.2f%%"),
@@ -324,7 +324,7 @@ def render():
         st.subheader("炸板监控")
         st.caption("涨停后打开的股票 — 封板失败，警惕短期风险（数据源: 东方财富）")
 
-        if st.button("🔄 刷新炸板数据", use_container_width=True, key="refresh_broken"):
+        if st.button("🔄 刷新炸板数据", width='stretch', key="refresh_broken"):
             st.cache_data.clear()
 
         with st.spinner("获取炸板数据..."):
@@ -360,7 +360,7 @@ def render():
 
             st.dataframe(
                 b_display,
-                use_container_width=True,
+                width='stretch',
                 hide_index=True,
                 column_config={
                     "涨跌幅(%)": st.column_config.NumberColumn(format="%.2f%%"),

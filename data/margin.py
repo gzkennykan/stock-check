@@ -105,16 +105,21 @@ def _fetch_margin_szse() -> pd.DataFrame:
 
 def get_margin_market(force_refresh: bool = False) -> pd.DataFrame:
     """
-    获取沪深两市合并的两融汇总数据（按日）。
+    获取沪深两市合并的两融汇总数据（按日）— DB优先，API补充。
     返回 DataFrame: date索引, margin_balance(亿), margin_buy(亿),
                     short_balance(亿), short_sell(亿股), net_margin(亿)
     """
-    _CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    if not force_refresh and _is_fresh(_MARGIN_MERGED_CACHE):
-        cached = pd.read_csv(_MARGIN_MERGED_CACHE, index_col=0, parse_dates=True)
+    from data.database import get_margin_data_db, insert_margin_data, is_margin_cached
+    from datetime import date as dt_date
+
+    # 1) DB 优先（检查当天是否有数据）
+    today_str = dt_date.today().isoformat()
+    if not force_refresh and is_margin_cached(today_str):
+        cached = get_margin_data_db(n_days=200)
         if not cached.empty:
             return cached
 
+    # 2) API
     try:
         sse = _fetch_margin_sse()
     except Exception:
@@ -124,19 +129,17 @@ def get_margin_market(force_refresh: bool = False) -> pd.DataFrame:
     except Exception:
         szse = pd.DataFrame()
 
-    # 合并逻辑：按日期加总两市
     pieces = []
     for df in [sse, szse]:
         if not df.empty:
             pieces.append(df)
 
     if not pieces:
-        # 尝试从缓存恢复
-        if _MARGIN_MERGED_CACHE.exists():
-            return pd.read_csv(_MARGIN_MERGED_CACHE, index_col=0, parse_dates=True)
+        cached = get_margin_data_db(n_days=200)
+        if not cached.empty:
+            return cached
         return pd.DataFrame()
 
-    # 按日期合并（有些日期可能只有单市数据）
     all_dates = pd.DatetimeIndex([])
     for p in pieces:
         all_dates = all_dates.union(p.index)
@@ -151,21 +154,27 @@ def get_margin_market(force_refresh: bool = False) -> pd.DataFrame:
             combined = pd.concat(series_list, axis=1).sum(axis=1, min_count=1)
             result[col] = combined
 
-    # 转换为亿元便于阅读
     for col in ["margin_balance", "margin_buy", "margin_repay", "short_balance"]:
         if col in result.columns:
             result[f"{col}_yi"] = result[col] / 1e8
 
     if "short_vol" in result.columns:
-        result["short_vol_yi"] = result["short_vol"] / 1e8  # 亿股
+        result["short_vol_yi"] = result["short_vol"] / 1e8
 
-    # 融资净买入 = 融资买入 - 融资偿还
     if "margin_buy" in result.columns and "margin_repay" in result.columns:
         result["net_margin_buy"] = result["margin_buy"] - result["margin_repay"]
         result["net_margin_buy_yi"] = result["net_margin_buy"] / 1e8
 
     result = result.dropna(how="all")
-    result.to_csv(_MARGIN_MERGED_CACHE)
+
+    # 3) 写入 DB
+    try:
+        db_df = result.reset_index().rename(columns={"index": "trade_date"})
+        db_df["market"] = "merged"
+        insert_margin_data(db_df)
+    except Exception:
+        pass
+
     return result
 
 

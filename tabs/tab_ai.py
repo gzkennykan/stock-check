@@ -34,22 +34,49 @@ def render():
     st.caption("LLM 驱动的多维度股票分析 — 技术面 + 资金面 + 基本面 + AI 解读")
 
     # ── API 配置（折叠） ──
-    with st.expander("⚙️ LLM API 配置", expanded=False):
+    # 使用 st.session_state 持久化 API 配置，解决 password 字段不显示 value 的问题
+    if "llm_config" not in st.session_state:
+        # 首次加载：从 LLM_CONFIG 和 get_llm_config 读取
         cfg = get_llm_config()
+        st.session_state.llm_config = {
+            "provider": cfg["provider"],
+            "api_key": cfg["api_key"],
+            "model": cfg["model"],
+            "base_url": cfg["base_url"],
+        }
+    else:
+        # 已有 session_state 配置 → 同步回 LLM_CONFIG（防止页面切换后丢失）
+        sc = st.session_state.llm_config
+        set_llm_config(
+            provider=sc.get("provider"),
+            api_key=sc.get("api_key", ""),
+            model=sc.get("model", ""),
+            base_url=sc.get("base_url", ""),
+        )
+
+    with st.expander("⚙️ LLM API 配置", expanded=not bool(st.session_state.llm_config.get("api_key"))):
+        # ── 当前配置状态 ──
+        saved_key = st.session_state.llm_config.get("api_key", "")
+        saved_provider = st.session_state.llm_config.get("provider", "deepseek")
+        if saved_key:
+            masked = saved_key[:4] + "****" + saved_key[-4:] if len(saved_key) > 8 else "****"
+            st.success(f"✅ 已配置 {saved_provider} | Key: {masked}")
+        else:
+            st.info("💡 未配置 API Key，将使用规则引擎离线分析")
 
         c1, c2 = st.columns(2)
         with c1:
             provider = st.selectbox(
                 "LLM 提供商",
                 ["deepseek", "qwen", "openai"],
-                index=["deepseek", "qwen", "openai"].index(cfg["provider"]),
+                index=["deepseek", "qwen", "openai"].index(st.session_state.llm_config["provider"]),
                 format_func=lambda x: {"deepseek": "DeepSeek", "qwen": "通义千问", "openai": "OpenAI兼容"}[x],
                 key="ai_provider",
             )
         with c2:
             model = st.text_input(
                 "模型名称",
-                value=cfg["model"],
+                value=st.session_state.llm_config["model"],
                 placeholder="deepseek-chat / qwen-plus / gpt-4o-mini",
                 key="ai_model",
             )
@@ -57,42 +84,43 @@ def render():
         c3, c4 = st.columns(2)
         with c3:
             api_key = st.text_input(
-                "API Key",
+                "API Key（输入后覆盖已保存的key）",
                 type="password",
-                value=cfg["api_key"],
-                placeholder="sk-...",
+                placeholder="sk-...（留空则保持当前配置）",
                 key="ai_api_key",
             )
         with c4:
             base_url = st.text_input(
                 "API Base URL（可选）",
-                value=cfg["base_url"],
+                value=st.session_state.llm_config.get("base_url", ""),
                 placeholder="留空使用默认",
                 key="ai_base_url",
             )
 
-        if st.button("💾 保存配置", key="ai_save_config"):
-            set_llm_config(
-                provider=provider,
-                api_key=api_key,
-                model=model,
-                base_url=base_url,
-            )
-            st.success("配置已保存（本会话有效）")
-            st.rerun()
-
-        # 使用提示
-        api_configured = bool(api_key or cfg["api_key"])
-        if api_configured:
-            st.success(f"✅ 已配置 {provider} / {model or cfg['model']}")
-        else:
-            st.info(
-                "💡 未配置 API Key 时将使用**规则引擎**进行离线分析。"
-                "配置 LLM 后可获得更深入的自然语言解读。\n\n"
-                "**获取免费 API Key:**\n"
-                "- DeepSeek: https://platform.deepseek.com （新用户赠送额度）\n"
-                "- 通义千问: https://dashscope.aliyun.com （百万人免费额度）"
-            )
+        col_save, col_clear = st.columns([1, 1])
+        with col_save:
+            if st.button("💾 保存配置", key="ai_save_config", width='stretch'):
+                # 更新 session_state
+                if api_key:
+                    st.session_state.llm_config["api_key"] = api_key
+                st.session_state.llm_config["provider"] = provider
+                st.session_state.llm_config["model"] = model
+                if base_url:
+                    st.session_state.llm_config["base_url"] = base_url
+                # 同步到全局 LLM_CONFIG（供 analyze_stock 等函数读取）
+                set_llm_config(
+                    provider=provider,
+                    api_key=api_key if api_key else None,
+                    model=model if model else None,
+                    base_url=base_url if base_url else None,
+                )
+                st.success("配置已保存 ✅")
+                st.rerun()
+        with col_clear:
+            if st.button("🗑️ 清除 Key", key="ai_clear_key", width='stretch'):
+                st.session_state.llm_config["api_key"] = ""
+                set_llm_config(api_key="", persist=True)
+                st.rerun()
 
     st.divider()
 
@@ -115,7 +143,7 @@ def render():
                 key="ai_input",
             )
         with col_in2:
-            do_analyze = st.button("🔬 AI 分析", use_container_width=True, type="primary", key="ai_go")
+            do_analyze = st.button("🔬 AI 分析", width='stretch', type="primary", key="ai_go")
         with col_in3:
             extra_q = st.text_input(
                 "额外问题（可选）",
@@ -157,7 +185,7 @@ def render():
                 key="sent_input",
             )
         with sent_col2:
-            do_sentiment = st.button("🔍 分析舆情", use_container_width=True, type="primary", key="sent_go")
+            do_sentiment = st.button("🔍 分析舆情", width='stretch', type="primary", key="sent_go")
 
         if do_sentiment and sent_input.strip():
             code = _resolve_input(sent_input.strip(), name_map)
@@ -184,7 +212,7 @@ def render():
             height=120,
             key="ai_batch_input",
         )
-        if st.button("🔬 批量 AI 分析", use_container_width=True, type="primary", key="ai_batch_go"):
+        if st.button("🔬 批量 AI 分析", width='stretch', type="primary", key="ai_batch_go"):
             lines = [l.strip() for l in batch_input.strip().split("\n") if l.strip()]
             if not lines:
                 st.error("请输入至少一只股票")
@@ -223,7 +251,7 @@ def render():
             height=120,
             key="ai_pf_input",
         )
-        if st.button("🧺 组合诊断", use_container_width=True, type="primary", key="ai_pf_go"):
+        if st.button("🧺 组合诊断", width='stretch', type="primary", key="ai_pf_go"):
             lines = [l.strip() for l in pf_input.strip().split("\n") if l.strip()]
             if len(lines) < 2:
                 st.error("至少需要2只股票进行组合诊断")
@@ -344,7 +372,7 @@ def _render_batch_results(results: list):
 
     st.dataframe(
         df,
-        use_container_width=True,
+        width='stretch',
         hide_index=True,
         column_config={
             "评分": st.column_config.ProgressColumn(
@@ -391,7 +419,7 @@ def _render_portfolio_result(result: dict):
             })
         df = pd.DataFrame(rows)
         df = df.sort_values("评分", ascending=False).reset_index(drop=True)
-        st.dataframe(df, use_container_width=True, hide_index=True)
+        st.dataframe(df, width='stretch', hide_index=True)
 
 
 def _render_sentiment_result(code: str, name: str, result: dict):
@@ -441,7 +469,7 @@ def _render_sentiment_result(code: str, name: str, result: dict):
         )
         fig.update_yaxes(title_text="情绪分 (-1~1)", secondary_y=False)
         fig.update_yaxes(title_text="新闻量", secondary_y=True)
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width='stretch')
 
     # 重大事件
     key_events = result.get("key_events", [])
