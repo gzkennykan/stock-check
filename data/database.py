@@ -1470,7 +1470,15 @@ def insert_northbound_flow(df: pd.DataFrame) -> int:
         if df.empty:
             return 0
         conn.register("write_df", df)
-        conn.execute("INSERT INTO northbound_flow SELECT * FROM write_df")
+        # 显式按列名映射：write_df 只包含 API 提供的字段，
+        # 与表结构 (trade_date,total_buy,total_sell,...) 不一致时也能正确写入
+        conn.execute("""
+            INSERT INTO northbound_flow
+                (trade_date, total_buy, total_sell, net_flow, sh_buy, sh_sell, sz_buy, sz_sell)
+            SELECT
+                trade_date, total_buy, total_sell, net_flow, sh_buy, sh_sell, sz_buy, sz_sell
+            FROM write_df
+        """)
         conn.unregister("write_df")
         return len(df)
     finally:

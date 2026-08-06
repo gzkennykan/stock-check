@@ -41,7 +41,7 @@ def render():
         if df.empty:
             st.error(f"日期 {end_str} 无足够数据")
         else:
-            exclude = {"symbol", "trade_date", "daily_ret"}
+            exclude = {"symbol", "trade_date", "daily_ret", "close"}
             factor_cols = [c for c in df.columns if c not in exclude]
             st.session_state.ml_factors_df = df
             st.session_state.ml_factor_cols = factor_cols

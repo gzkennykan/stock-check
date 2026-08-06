@@ -130,7 +130,11 @@ def cluster_by_correlation(
     if corr_matrix.empty or len(corr_matrix) < n_clusters:
         return pd.DataFrame()
 
-    from scipy.cluster.hierarchy import linkage, fcluster
+    try:
+        from scipy.cluster.hierarchy import linkage, fcluster
+    except ImportError:
+        # scipy 未安装时优雅降级，避免整个 Tab 崩溃
+        return pd.DataFrame()
 
     # 将相关性转为距离 (1 - |r|)
     dist = 1 - corr_matrix.abs()

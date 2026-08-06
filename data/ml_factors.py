@@ -81,7 +81,7 @@ def compute_all_factors(end_date: str) -> pd.DataFrame:
                     (close - c_1d) / NULLIF(c_1d, 0) AS daily_ret
                 FROM with_ma
             )
-            SELECT symbol, trade_date,
+            SELECT symbol, trade_date, close,
                 -- 动量因子
                 ROUND((close / NULLIF(c_5d, 0) - 1) * 100, 4)  AS mom_5d,
                 ROUND((close / NULLIF(c_10d, 0) - 1) * 100, 4) AS mom_10d,

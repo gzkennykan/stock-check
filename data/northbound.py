@@ -26,6 +26,10 @@ def fetch_northbound_flow(start_date: str = None, end_date: str = None) -> pd.Da
     try:
         cached = get_northbound_flow_db(n_days=2000)
         if not cached.empty:
+            # DB 表无 deal_amt 列，从 total_buy 回填，保证下游读取逻辑一致
+            if "deal_amt" not in cached.columns and "total_buy" in cached.columns:
+                cached = cached.copy()
+                cached["deal_amt"] = cached["total_buy"]
             if "trade_date" in cached.columns:
                 cached = cached.set_index("trade_date").sort_index()
             if start_date:
@@ -78,10 +82,18 @@ def fetch_northbound_flow(start_date: str = None, end_date: str = None) -> pd.Da
         result = result.set_index("date").sort_index()
         result = result.dropna(subset=["deal_amt"])
 
-        # 3) 写入 DB
+        # 3) 写入 DB（API 只披露总成交额 DEAL_AMT，其余字段置空）
         try:
-            db_df = result.reset_index().rename(columns={"date": "trade_date"})
-            db_df["total_buy"] = db_df["deal_amt"]
+            db_df = pd.DataFrame({
+                "trade_date": result.index,
+                "total_buy": result["deal_amt"].to_numpy(),
+                "total_sell": None,
+                "net_flow": None,
+                "sh_buy": None,
+                "sh_sell": None,
+                "sz_buy": None,
+                "sz_sell": None,
+            })
             insert_northbound_flow(db_df)
         except Exception:
             pass

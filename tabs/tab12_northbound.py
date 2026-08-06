@@ -94,7 +94,7 @@ def render():
             st.warning("所选日期范围内无北向资金数据")
             return
 
-        deal = nb_df["deal_amt"]
+        deal = nb_df["deal_amt"] if "deal_amt" in nb_df.columns else nb_df["total_buy"]
         c1, c2, c3, c4 = st.columns(4)
         with c1:
             st.metric("日均成交额", f"{deal.mean():,.0f} 亿")

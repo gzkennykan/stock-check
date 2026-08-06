@@ -456,7 +456,13 @@ def _render_correlation():
     # 聚类
     if len(corr) >= 5:
         st.markdown("**相关性聚类**")
-        clusters = cluster_by_correlation(corr, n_clusters=min(5, len(corr)))
+        try:
+            clusters = cluster_by_correlation(corr, n_clusters=min(5, len(corr)))
+            if clusters.empty:
+                st.caption("ℹ️ 聚类需安装 scipy：`pip install scipy`")
+        except Exception as e:
+            st.caption(f"ℹ️ 聚类暂不可用: {e}")
+            clusters = pd.DataFrame()
         if not clusters.empty:
             for cid in sorted(clusters["cluster"].unique()):
                 members = clusters[clusters["cluster"] == cid]["symbol"].tolist()
@@ -887,28 +893,39 @@ def _render_stock_diagnosis():
     # Part A: 核心指标卡片
     # ═══════════════════════════════
     st.markdown("### 📊 技术面核心指标")
+    # compute_full_analysis 在历史K线不足时返回 None，需做空值防护
+    def _fmt_pct(v, plus=True):
+        if v is None:
+            return "N/A"
+        return f"{v:+.2f}%" if plus else f"{v:.1f}%"
+
+    def _fmt_num(v, nd=4):
+        return "N/A" if v is None else f"{v:.{nd}f}"
+
     c1, c2, c3, c4, c5, c6 = st.columns(6)
     with c1:
         st.metric("最新收盘", f"{tech['close']:.2f}")
     with c2:
-        st.metric("近20日收益", f"{tech.get('ret_20d', 0):+.2f}%")
+        st.metric("近20日收益", _fmt_pct(tech.get("ret_20d")))
     with c3:
-        st.metric("近60日收益", f"{tech.get('ret_60d', 0):+.2f}%")
+        st.metric("近60日收益", _fmt_pct(tech.get("ret_60d")))
     with c4:
-        st.metric("近120日收益", f"{tech.get('ret_120d', 0):+.2f}%")
+        st.metric("近120日收益", _fmt_pct(tech.get("ret_120d")))
     with c5:
-        st.metric("60日年化波动", f"{tech.get('vol_60d_annual', 0):.1f}%")
+        st.metric("60日年化波动", _fmt_pct(tech.get("vol_60d_annual"), plus=False))
     with c6:
-        rsi = tech.get("rsi14", 50)
-        rsi_color = "normal" if 30 <= rsi <= 70 else "off"
-        st.metric("RSI(14)", f"{rsi:.1f}", delta="超卖" if rsi < 30 else ("超买" if rsi > 70 else None))
+        rsi = tech.get("rsi14")
+        if rsi is None:
+            st.metric("RSI(14)", "N/A")
+        else:
+            st.metric("RSI(14)", f"{rsi:.1f}", delta="超卖" if rsi < 30 else ("超买" if rsi > 70 else None))
 
     # ── MACD ──
     st.caption(
-        f"MACD: {tech.get('macd', 0):.4f}  |  "
-        f"Signal: {tech.get('macd_signal', 0):.4f}  |  "
-        f"柱: {tech.get('macd_hist', 0):+.4f}  "
-        f"({'🟢 多头' if (tech.get('macd_hist', 0) or 0) > 0 else '🔴 空头'})"
+        f"MACD: {_fmt_num(tech.get('macd'))}  |  "
+        f"Signal: {_fmt_num(tech.get('macd_signal'))}  |  "
+        f"柱: {_fmt_num(tech.get('macd_hist'))}  "
+        f"({'🟢 多头' if (tech.get('macd_hist') or 0) > 0 else '🔴 空头'})"
     )
 
     # ── 均线结构 ──

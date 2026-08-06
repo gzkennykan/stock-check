@@ -69,6 +69,22 @@ def _classify_sentiment(score: float) -> str:
         return "neutral"
 
 
+def _normalize_cached_news(df: pd.DataFrame) -> pd.DataFrame:
+    """补齐 DB 缓存行缺失的列，使返回结构与 API 路径一致。
+
+    stock_news 表只持久化 [symbol, pub_date, title, sentiment_score]，
+    缺少 sentiment_label / pub_time。直接返回会导致调用方 KeyError。
+    """
+    if df is None or df.empty:
+        return df
+    df = df.copy()
+    if "pub_time" not in df.columns and "pub_date" in df.columns:
+        df["pub_time"] = pd.to_datetime(df["pub_date"], errors="coerce")
+    if "sentiment_label" not in df.columns and "sentiment_score" in df.columns:
+        df["sentiment_label"] = df["sentiment_score"].apply(_classify_sentiment)
+    return df
+
+
 def fetch_stock_news(symbol: str, max_pages: int = 3) -> pd.DataFrame:
     """
     获取个股新闻/公告（东方财富源）— DB优先，API补充。
@@ -90,7 +106,7 @@ def fetch_stock_news(symbol: str, max_pages: int = 3) -> pd.DataFrame:
     try:
         cached = get_stock_news_db(symbol, n_days=db_cache_days)
         if not cached.empty:
-            return cached
+            return _normalize_cached_news(cached)
     except Exception:
         pass
 
@@ -100,12 +116,12 @@ def fetch_stock_news(symbol: str, max_pages: int = 3) -> pd.DataFrame:
         if df is None or df.empty:
             # 周末回退：查 DB 最近 30 天的缓存
             try:
-                return get_stock_news_db(symbol, n_days=30)
+                return _normalize_cached_news(get_stock_news_db(symbol, n_days=30))
             except Exception:
                 return pd.DataFrame()
     except Exception:
         try:
-            return get_stock_news_db(symbol, n_days=30)
+            return _normalize_cached_news(get_stock_news_db(symbol, n_days=30))
         except Exception:
             return pd.DataFrame()
 

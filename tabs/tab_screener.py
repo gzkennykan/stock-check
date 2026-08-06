@@ -130,6 +130,10 @@ def _render_filter_mode(combined: pd.DataFrame):
                     fin_rows.append(fdata)
         if fin_rows:
             fin_df = pd.DataFrame(fin_rows).rename(columns={"_match_code": "code"})
+            # fetch_financial_indicators 的 API 路径会附带 name 键，
+            # 与 result 本身的 name 列冲突产生 name_x/name_y，这里丢弃 fin_df 的 name
+            if "name" in fin_df.columns:
+                fin_df = fin_df.drop(columns=["name"])
             result = result.merge(fin_df, on="code", how="inner")
             if roe_min > 0 and "roe" in result.columns:
                 result = result[result["roe"] >= roe_min]
