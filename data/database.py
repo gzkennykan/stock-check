@@ -167,6 +167,36 @@ def _ensure_tables(conn) -> None:
         CREATE INDEX IF NOT EXISTS idx_ff_date ON fund_flow_daily(trade_date)
     """)
 
+    # ── ML 因子缓存（compute_all_factors 结果落库，按日期+版本复用）──
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS ml_factor_cache (
+            trade_date      DATE          NOT NULL,
+            symbol          VARCHAR(10)   NOT NULL,
+            version         INTEGER       NOT NULL,
+            close           DOUBLE,
+            mom_5d          DOUBLE,
+            mom_10d         DOUBLE,
+            mom_20d         DOUBLE,
+            mom_60d         DOUBLE,
+            rev_5d          DOUBLE,
+            ma20_dev        DOUBLE,
+            ma60_dev        DOUBLE,
+            ma120_dev       DOUBLE,
+            dist_20d_high   DOUBLE,
+            dist_20d_low    DOUBLE,
+            vol_ratio_5d    DOUBLE,
+            log_avg_vol_20d DOUBLE,
+            daily_ret       DOUBLE,
+            vol_20d         DOUBLE,
+            rsi_14          DOUBLE,
+            updated_at      TIMESTAMP     DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (trade_date, symbol, version)
+        )
+    """)
+    conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_mlfc_date ON ml_factor_cache(trade_date)
+    """)
+
     # ── 行业板块实时行情 ──
     conn.execute("""
         CREATE TABLE IF NOT EXISTS industry_spot (
@@ -499,6 +529,78 @@ def insert_fund_flow_snapshot(df: pd.DataFrame, trade_date: str = None) -> int:
     except Exception:
         conn.execute("ROLLBACK")
         raise
+    finally:
+        conn.close()
+
+
+# ────────────────────────── ML 因子缓存 ──────────────────────────
+
+# 与 compute_all_factors 的 SQL 输出保持一致（不含 symbol/trade_date/version/updated_at）
+_ML_FACTOR_COLS = [
+    "close", "mom_5d", "mom_10d", "mom_20d", "mom_60d", "rev_5d",
+    "ma20_dev", "ma60_dev", "ma120_dev", "dist_20d_high", "dist_20d_low",
+    "vol_ratio_5d", "log_avg_vol_20d", "daily_ret", "vol_20d", "rsi_14",
+]
+
+
+def save_ml_factor_cache(df: pd.DataFrame, trade_date: str, version: int = 1) -> int:
+    """将全市场因子截面数据落库缓存（upsert，同一 (trade_date, symbol) 覆盖）。
+
+    返回写入行数。失败抛异常（调用方自行兜底）。
+    """
+    if df is None or df.empty:
+        return 0
+    conn = get_connection()
+    try:
+        _ensure_tables(conn)
+        w = df.copy()
+        if "code" in w.columns:
+            w = w.rename(columns={"code": "symbol"})
+        if "symbol" not in w.columns:
+            return 0
+        w["trade_date"] = trade_date
+        w["version"] = int(version)
+        cols = ["symbol", "trade_date", "version"] + \
+               [c for c in _ML_FACTOR_COLS if c in w.columns]
+        w = w[cols]
+
+        conn.execute("BEGIN")
+        conn.execute(f"""
+            INSERT OR REPLACE INTO ml_factor_cache ({", ".join(cols)})
+            SELECT {", ".join(cols)} FROM w
+        """)
+        conn.execute("COMMIT")
+        return len(w)
+    except Exception:
+        try:
+            conn.execute("ROLLBACK")
+        except Exception:
+            pass
+        raise
+    finally:
+        conn.close()
+
+
+def load_ml_factor_cache(trade_date: str, version: int = 1) -> pd.DataFrame | None:
+    """读取某交易日的缓存因子截面；无缓存/表不存在返回 None。
+
+    返回列与 compute_all_factors 输出一致（不含 version/updated_at）。
+    """
+    conn = get_connection()
+    try:
+        if not _table_exists(conn, "ml_factor_cache"):
+            return None
+        sel = ", ".join(["trade_date", "symbol"] + _ML_FACTOR_COLS)
+        df = conn.execute(
+            f"SELECT {sel} FROM ml_factor_cache WHERE trade_date = ? AND version = ?",
+            [trade_date, int(version)],
+        ).df()
+        if df is None or df.empty:
+            return None
+        df["symbol"] = df["symbol"].astype(str)
+        return df
+    except Exception:
+        return None
     finally:
         conn.close()
 

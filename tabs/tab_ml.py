@@ -36,7 +36,7 @@ def render():
         st.session_state.ml_factor_cols = None
 
     if st.button("📊 加载/刷新因子数据", width='stretch', type="primary", key="ml_load"):
-        with st.spinner("计算全市场20+因子（约需10-20秒）..."):
+        with st.spinner("计算全市场20+因子（首次约10-20秒，已缓存日期秒出）..."):
             df = compute_all_factors(end_str)
         if df.empty:
             st.error(f"日期 {end_str} 无足够数据")

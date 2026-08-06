@@ -14,16 +14,50 @@ import numpy as np
 import pandas as pd
 from datetime import datetime, timedelta
 
-from .database import get_connection, _table_exists
+from .database import (
+    get_connection, _table_exists, load_ml_factor_cache, save_ml_factor_cache,
+)
 
 
 # ══════════════════════════════════════════════════════════
 # 1. 全市场因子计算
 # ══════════════════════════════════════════════════════════
 
-def compute_all_factors(end_date: str) -> pd.DataFrame:
+_FACTOR_VERSION = 1  # 因子计算逻辑变更时 +1，使旧缓存失效
+
+
+def compute_all_factors(end_date: str, force_refresh: bool = False) -> pd.DataFrame:
     """
-    在指定日期对全市场计算 20+ 因子。
+    在指定日期对全市场计算 20+ 因子（结果落库缓存，同日期二次秒出）。
+
+    缓存按 (trade_date, 版本) 存储于 ml_factor_cache 表：
+      - force_refresh=False：命中缓存直接返回，无缓存才重算
+      - force_refresh=True ：强制重算并覆盖缓存
+    因子计算逻辑变更时递增 _FACTOR_VERSION 自动失效旧缓存。
+
+    返回:
+        DataFrame, columns=[symbol, trade_date, close, 因子...]
+    """
+    if not force_refresh:
+        try:
+            cached = load_ml_factor_cache(end_date, _FACTOR_VERSION)
+        except Exception:
+            cached = None
+        if cached is not None:
+            return cached
+
+    df = _compute_all_factors_sql(end_date)
+    if not df.empty:
+        try:
+            save_ml_factor_cache(df, end_date, _FACTOR_VERSION)
+        except Exception:
+            pass  # 落库失败不影响本次返回
+    return df
+
+
+def _compute_all_factors_sql(end_date: str) -> pd.DataFrame:
+    """
+    在指定日期对全市场计算 20+ 因子（纯计算，不做缓存）。
 
     因子清单:
       动量: mom_5d, mom_10d, mom_20d, mom_60d
