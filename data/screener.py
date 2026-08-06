@@ -355,72 +355,114 @@ def screen_stocks(df: pd.DataFrame,
 # ════════════════ 资金流向 & 成交额排行 ════════════════
 
 def get_fund_flow_data(force_refresh: bool = False) -> pd.DataFrame:
-    """获取全市场资金流向数据（从 DuckDB 本地快照，秒级）
+    """资金流向排名 — kline(TDX) × fund_flow(同花顺) 同日期 JOIN
 
-    自动用 kline 最新收盘价替换 fund_flow 快照中的旧价格，
-    确保价格与 K 线数据一致。
+    简化为一条 SQL INNER JOIN，不再做任何"补正"/fallback/merge 的复杂逻辑。
+    数据日期 = daily_kline 和 fund_flow_daily 都有数据的最近一天。
     """
-    from data.database import get_fund_flow_ranking, get_fund_flow_latest_date, get_connection
+    from data.database import (
+        get_common_trading_date, get_connection, get_stock_name_map,
+        get_fund_flow_latest_date, get_latest_trading_date,
+    )
 
-    latest = get_fund_flow_latest_date()
-    if latest is None:
-        return pd.DataFrame(columns=["code", "name", "price", "pct_change",
-                                      "main_capital", "capital_inflow",
-                                      "capital_outflow", "turnover_rate", "turnover"])
-    df = get_fund_flow_ranking(date=latest, sort_by="main_net", limit=6000)
-    if df.empty:
-        return pd.DataFrame(columns=["code", "name", "price", "pct_change",
-                                      "main_capital", "capital_inflow",
-                                      "capital_outflow", "turnover_rate", "turnover"])
-    df = df.rename(columns={"symbol": "code", "main_net": "main_capital"})
+    trade_date = get_common_trading_date()
 
-    # ── 用 kline 最新收盘价更新 price 和 pct_change ──
-    # 基金流快照的 price 是同花顺抓取时刻的盘中价，不是最新收盘价
-    from data.database import get_latest_trading_date
-    max_date = get_latest_trading_date()  # "YYYY-MM-DD"
-    if max_date:
-        conn = get_connection(read_only=True)
+    # ── 自愈：如果资金流明显落后于 kline，触发一次同步（幂等，当日已有则跳过）──
+    kline_date = get_latest_trading_date()
+    flow_date = get_fund_flow_latest_date()
+    stale = (
+        flow_date is not None and kline_date is not None
+        and flow_date < kline_date
+    )
+    if trade_date is None or stale:
         try:
-            # 查询全局最新交易日所有股票的收盘价（秒级，按日期索引）
-            kline_df = conn.execute("""
-                SELECT symbol, close AS price
-                FROM daily_kline
-                WHERE trade_date = ?
-            """, [max_date]).df()
-
-            # 查询前一日收盘价用于计算涨跌幅
-            prev_date = conn.execute("""
-                SELECT MAX(trade_date) FROM daily_kline WHERE trade_date < ?
-            """, [max_date]).fetchone()[0]
-            if prev_date:
-                prev_df = conn.execute("""
-                    SELECT symbol, close AS prev_close
-                    FROM daily_kline WHERE trade_date = ?
-                """, [str(prev_date)]).df()
-                kline_df = kline_df.merge(prev_df, on="symbol", how="left")
-                kline_df["pct_change"] = np.nan
-                mask = kline_df["prev_close"].notna() & (kline_df["prev_close"] > 0)
-                kline_df.loc[mask, "pct_change"] = (
-                    (kline_df.loc[mask, "price"] - kline_df.loc[mask, "prev_close"])
-                    / kline_df.loc[mask, "prev_close"] * 100
-                ).round(2)
-            else:
-                kline_df["pct_change"] = np.nan
-
-            if not kline_df.empty:
-                kline_df["code"] = kline_df["symbol"].astype(str)
-                # 用 kline 的 price/pct_change 替换 fund_flow 中的值
-                df = df.drop(columns=["price", "pct_change"], errors="ignore")
-                df = df.merge(
-                    kline_df[["code", "price", "pct_change"]],
-                    on="code", how="left"
-                )
+            from data.fund_flow import sync_fund_flow_snapshot
+            sync_fund_flow_snapshot(force=False)
         except Exception:
             pass
-        finally:
-            conn.close()
+        trade_date = get_common_trading_date()  # 同步后再查一次
 
-    return df
+    if trade_date is None:
+        import streamlit as st
+        st.session_state["_fund_flow_error"] = "daily_kline 和 fund_flow_daily 没有共同的交易日期，请先同步数据"
+        st.session_state["_fund_flow_date"] = None
+        return pd.DataFrame(columns=["code", "name", "price", "pct_change",
+                                      "main_capital", "capital_inflow",
+                                      "capital_outflow", "turnover_rate", "turnover"])
+
+    # 记录数据日期，供 UI 显示
+    import streamlit as st
+    st.session_state["_fund_flow_date"] = trade_date
+    # 若仍落后于 kline，说明同步失败，给出过期提示
+    if kline_date and trade_date < kline_date:
+        st.session_state["_fund_flow_error"] = (
+            f"⚠️ 资金流数据停留在 {trade_date}（kline 最新 {kline_date}），同步失败或非交易日"
+        )
+    else:
+        st.session_state["_fund_flow_error"] = None
+
+    conn = get_connection(read_only=True)
+    try:
+        # ── 一条 SQL：kline JOIN fund_flow，同一天同一只股票 ──
+        df = conn.execute("""
+            SELECT
+                k.symbol            AS code,
+                k.close             AS price,
+                COALESCE(k.amount, 0) AS turnover,
+                k.volume,
+                f.main_net          AS main_capital,
+                f.capital_inflow,
+                f.capital_outflow,
+                f.turnover_rate
+            FROM daily_kline k
+            INNER JOIN fund_flow_daily f
+                ON f.symbol = k.symbol AND f.trade_date = k.trade_date
+            WHERE k.trade_date = ?
+            ORDER BY f.main_net DESC
+        """, [trade_date]).df()
+
+        if df is None or df.empty:
+            return pd.DataFrame(columns=["code", "name", "price", "pct_change",
+                                          "main_capital", "capital_inflow",
+                                          "capital_outflow", "turnover_rate", "turnover"])
+
+        # ── 涨跌幅 = (close - 前日close) / 前日close × 100 ──
+        prev_date = conn.execute(
+            "SELECT MAX(trade_date) FROM daily_kline WHERE trade_date < ?",
+            [trade_date]
+        ).fetchone()[0]
+        if prev_date:
+            prev = conn.execute(
+                "SELECT symbol, close FROM daily_kline WHERE trade_date = ?",
+                [str(prev_date)]
+            ).df()
+            if prev is not None and not prev.empty:
+                prev["code"] = prev["symbol"].astype(str)
+                df = df.merge(prev[["code", "close"]], on="code", how="left",
+                              suffixes=("", "_prev"))
+                mask = df["close"].notna() & (df["close"] > 0)
+                df["pct_change"] = np.nan
+                df.loc[mask, "pct_change"] = (
+                    (df.loc[mask, "price"] - df.loc[mask, "close"])
+                    / df.loc[mask, "close"] * 100
+                ).round(2)
+                df = df.drop(columns=["close"])
+            else:
+                df["pct_change"] = np.nan
+        else:
+            df["pct_change"] = np.nan
+
+        # ── 补齐名称 ──
+        names = get_stock_name_map()
+        df["name"] = df["code"].map(names).fillna("")
+
+        # ── 最终列顺序 ──
+        keep = ["code", "name", "price", "pct_change", "main_capital",
+                "capital_inflow", "capital_outflow", "turnover_rate", "turnover"]
+        return df[[c for c in keep if c in df.columns]].reset_index(drop=True)
+
+    finally:
+        conn.close()
 
 
 def get_top_capital_inflow(n: int = 50) -> pd.DataFrame:

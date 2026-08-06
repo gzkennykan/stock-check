@@ -100,8 +100,9 @@ def _startup_fund_flow_sync():
 
 
 _startup_tdx_sync()
-# 资金流同步改为懒加载：仅在用户首次访问需要资金流数据的页面时触发
-# 避免 AKShare 同花顺接口慢/卡死阻塞启动
+# 资金流同步：后台线程在启动时抓取当日全市场资金流快照（不阻塞启动）。
+# 若接口慢/失败，get_fund_flow_data() 会有自愈同步兜底。
+_startup_fund_flow_sync()
 
 
 STRATEGY_MAP = {

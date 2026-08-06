@@ -106,11 +106,17 @@ def _ensure_tables(conn) -> None:
             low         DOUBLE,
             close       DOUBLE,
             volume      DOUBLE,
+            amount      DOUBLE,
             source      VARCHAR(20)   DEFAULT 'akshare',
             updated_at  TIMESTAMP     DEFAULT CURRENT_TIMESTAMP,
             PRIMARY KEY (symbol, trade_date)
         )
     """)
+    # 迁移：已有数据库可能缺少 amount 列
+    try:
+        conn.execute("ALTER TABLE daily_kline ADD COLUMN amount DOUBLE")
+    except Exception:
+        pass  # 列已存在则忽略
     conn.execute("""
         CREATE TABLE IF NOT EXISTS stock_info (
             symbol      VARCHAR(10)   PRIMARY KEY,
@@ -334,7 +340,8 @@ def insert_kline(symbol: str, df: pd.DataFrame, source: str = "akshare") -> int:
 
     参数:
         symbol: 股票代码
-        df: 包含 [open, high, low, close, volume] 的 DataFrame，index 为 date
+        df: 包含 [open, high, low, close, volume] 的 DataFrame，index 为 date；
+            可选含 amount（成交额/元，TDX 源有，akshare 源无）
         source: 数据来源
 
     返回:
@@ -347,8 +354,14 @@ def insert_kline(symbol: str, df: pd.DataFrame, source: str = "akshare") -> int:
     try:
         _ensure_tables(conn)
 
-        # 准备写入数据
-        write_df = df[["open", "high", "low", "close", "volume"]].copy()
+        # 准备写入数据（含 amount 如果存在）
+        base_cols = ["open", "high", "low", "close", "volume"]
+        if "amount" in df.columns:
+            base_cols.append("amount")
+        write_df = df[base_cols].copy()
+        # 兼容无 amount 的数据源（akshare），SQL 引用 amount 需要有此列
+        if "amount" not in write_df.columns:
+            write_df["amount"] = None
         write_df["symbol"] = symbol
         write_df["source"] = source
         write_df["trade_date"] = write_df.index  # index 是 date
@@ -358,8 +371,8 @@ def insert_kline(symbol: str, df: pd.DataFrame, source: str = "akshare") -> int:
         conn.execute("BEGIN")
         conn.execute("""
             INSERT OR REPLACE INTO daily_kline
-                (symbol, trade_date, open, high, low, close, volume, source, updated_at)
-            SELECT symbol, trade_date, open, high, low, close, volume, source, updated_at
+                (symbol, trade_date, open, high, low, close, volume, amount, source, updated_at)
+            SELECT symbol, trade_date, open, high, low, close, volume, amount, source, updated_at
             FROM write_df
         """)
         conn.execute("COMMIT")
@@ -389,7 +402,10 @@ def insert_kline_batch(records: list[dict]) -> int:
             df = rec["df"]
             if df.empty:
                 continue
-            write_df = df[["open", "high", "low", "close", "volume"]].copy()
+            base_cols = ["open", "high", "low", "close", "volume"]
+            if "amount" in df.columns:
+                base_cols.append("amount")
+            write_df = df[base_cols].copy()
             write_df["symbol"] = rec["symbol"]
             write_df["source"] = rec.get("source", "akshare")
             write_df["trade_date"] = write_df.index
@@ -853,6 +869,29 @@ def get_latest_trading_date() -> str | None:
         if not _table_exists(conn, "daily_kline"):
             return None
         r = conn.execute("SELECT MAX(trade_date) FROM daily_kline").fetchone()
+        return str(r[0]) if r and r[0] else None
+    finally:
+        conn.close()
+
+
+def get_common_trading_date() -> str | None:
+    """返回 daily_kline 和 fund_flow_daily 两个表都有数据的最近日期。
+
+    用于资金排名等需要两个数据源对齐的场景。
+    如果任一表为空或没有交集日期，返回 None。
+    """
+    conn = get_connection(read_only=True)
+    try:
+        if not _table_exists(conn, "daily_kline") or not _table_exists(conn, "fund_flow_daily"):
+            return None
+        r = conn.execute("""
+            SELECT k.trade_date
+            FROM daily_kline k
+            INNER JOIN fund_flow_daily f ON f.trade_date = k.trade_date
+            GROUP BY k.trade_date
+            ORDER BY k.trade_date DESC
+            LIMIT 1
+        """).fetchone()
         return str(r[0]) if r and r[0] else None
     finally:
         conn.close()

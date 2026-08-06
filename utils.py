@@ -271,6 +271,12 @@ def format_stock_display(df: pd.DataFrame,
         rename_dict.update({k: v for k, v in extra_rename.items() if k in display.columns})
     display = display.rename(columns=rename_dict)
 
+    # 列排序：标准列（代码/名称/最新价/涨跌幅...）按 _STOCK_COLUMN_MAP 顺序排前面
+    # 其余列保持原顺序跟在后面
+    std_cols = [v for k, v in _STOCK_COLUMN_MAP.items() if v in display.columns]
+    other_cols = [c for c in display.columns if c not in std_cols]
+    display = display[std_cols + other_cols]
+
     # drop
     if drop_after:
         display = display[[c for c in display.columns if c not in drop_after]]

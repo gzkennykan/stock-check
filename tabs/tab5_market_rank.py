@@ -26,7 +26,14 @@ def render():
     with col_refresh:
         refresh = st.button("🔄 刷新数据", width='stretch', key="rank_refresh")
     with col_info:
-        st.caption(f"数据源: {VIEWS[view]['source']} (DuckDB)")
+        data_date = st.session_state.get("_fund_flow_date")
+        err = st.session_state.get("_fund_flow_error")
+        if view != "turnover" and data_date:
+            st.caption(f"📅 {data_date} — K线+资金流")
+        elif view != "turnover" and err:
+            st.caption(f"⚠️ {err}")
+        else:
+            st.caption(f"数据源: {VIEWS[view]['source']} (DuckDB)")
 
     kw = st.text_input("🔍 搜索代码/名称", key="rank_search",
                        placeholder="输入股票代码或名称从全市场搜索...")
