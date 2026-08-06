@@ -354,6 +354,13 @@ def screen_stocks(df: pd.DataFrame,
 
 # ════════════════ 资金流向 & 成交额排行 ════════════════
 
+import time as _time
+
+# 自愈同步节流：同步失败（如同花顺接口被限流）时，避免每次渲染页面都重试全市场抓取
+_last_fund_sync_attempt: dict[str, float] = {}
+_FUND_SYNC_THROTTLE = 600  # 秒，同一 kline 日期 10 分钟内最多重试一次
+
+
 def get_fund_flow_data(force_refresh: bool = False) -> pd.DataFrame:
     """资金流向排名 — kline(TDX) × fund_flow(同花顺) 同日期 JOIN
 
@@ -362,24 +369,29 @@ def get_fund_flow_data(force_refresh: bool = False) -> pd.DataFrame:
     """
     from data.database import (
         get_common_trading_date, get_connection, get_stock_name_map,
-        get_fund_flow_latest_date, get_latest_trading_date,
+        get_fund_flow_latest_date, get_latest_trading_date, invalidate_cache,
     )
 
     trade_date = get_common_trading_date()
 
     # ── 自愈：如果资金流明显落后于 kline，触发一次同步（幂等，当日已有则跳过）──
+    #    失败后节流：同一 kline 日期 10 分钟内不重复重试，避免每次切页都全市场抓取
     kline_date = get_latest_trading_date()
     flow_date = get_fund_flow_latest_date()
     stale = (
         flow_date is not None and kline_date is not None
         and flow_date < kline_date
     )
-    if trade_date is None or stale:
+    now = _time.monotonic()
+    if (trade_date is None or stale) and (now - _last_fund_sync_attempt.get(kline_date, 0.0)) >= _FUND_SYNC_THROTTLE:
+        _last_fund_sync_attempt[kline_date] = now
         try:
             from data.fund_flow import sync_fund_flow_snapshot
             sync_fund_flow_snapshot(force=False)
         except Exception:
             pass
+        # 同步可能写入/更新了数据，清掉 TTL 缓存，重新读取
+        invalidate_cache()
         trade_date = get_common_trading_date()  # 同步后再查一次
 
     if trade_date is None:

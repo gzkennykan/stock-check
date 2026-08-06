@@ -6,6 +6,7 @@ DuckDB 本地数据库：存储股票历史日线数据 & 基本信息，支持�
   - daily_kline: 日线OHLCV数据 (主键: symbol + trade_date)
   - stock_info:   股票基本信息 (主键: symbol)
 """
+import time as _time
 import pandas as pd
 from pathlib import Path
 from datetime import datetime
@@ -862,8 +863,37 @@ def get_stocks_in_db() -> pd.DataFrame:
 
 # ────────────────────────── 分析辅助 ──────────────────────────
 
+# 高频只读查询的进程内 TTL 缓存：
+# 这些函数每次渲染页面都会被调用（如资金排名页），内部是整表扫描/大 JOIN，
+# 用 300s 短缓存避免重复全表查询。数据同步后调用 invalidate_cache() 显式失效。
+_TTL_CACHE: dict[str, tuple[float, object]] = {}
+_CACHE_TTL = 300  # 秒
+
+
+def invalidate_cache(*keys: str) -> None:
+    """清除分析缓存；不带参数时清除全部（数据同步成功后调用）"""
+    if not keys:
+        _TTL_CACHE.clear()
+    else:
+        for k in keys:
+            _TTL_CACHE.pop(k, None)
+
+
+def _cached(key: str, ttl: int, fn):
+    hit = _TTL_CACHE.get(key)
+    if hit and _time.monotonic() - hit[0] < ttl:
+        return hit[1]
+    val = fn()
+    _TTL_CACHE[key] = (_time.monotonic(), val)
+    return val
+
+
 def get_latest_trading_date() -> str | None:
     """获取数据库中最新的交易日期，返回 'YYYY-MM-DD'"""
+    return _cached("latest_trading_date", _CACHE_TTL, _latest_trading_date_db)
+
+
+def _latest_trading_date_db() -> str | None:
     conn = get_connection(read_only=True)
     try:
         if not _table_exists(conn, "daily_kline"):
@@ -879,7 +909,12 @@ def get_common_trading_date() -> str | None:
 
     用于资金排名等需要两个数据源对齐的场景。
     如果任一表为空或没有交集日期，返回 None。
+    结果带 TTL 缓存，数据同步后调用 invalidate_cache() 失效。
     """
+    return _cached("common_trading_date", _CACHE_TTL, _common_trading_date_db)
+
+
+def _common_trading_date_db() -> str | None:
     conn = get_connection(read_only=True)
     try:
         if not _table_exists(conn, "daily_kline") or not _table_exists(conn, "fund_flow_daily"):
@@ -899,25 +934,25 @@ def get_common_trading_date() -> str | None:
 
 def today_or_latest_trading_day() -> str:
     """
-    返回今天或最近交易日（用于周末/节假日自动回退）。
+    返回今天或最近交易日。
 
-    周一至周五：返回今天的日期
-    周六/周日：返回数据库中最近的交易日（通常是周五）
-    如果数据库为空，退回上周五。
+    规则：仅当「今天」在 daily_kline 中已有数据时才返回今天，
+    否则返回数据库中最近的交易日。天然覆盖三种情况：
+      - 周末（周六/周日）
+      - 法定节假日（春节、国庆等，即使落在工作日）
+      - 交易日开盘前尚未完成同步
+    数据库为空时退回上周五。
     """
     from datetime import date, timedelta
     today = date.today()
-    weekday = today.weekday()  # 0=Mon ... 6=Sun
+    today_str = today.strftime("%Y-%m-%d")
 
-    if weekday < 5:
-        return today.strftime("%Y-%m-%d")
-
-    # 周末：回退到最近一个交易日
     latest_db = get_latest_trading_date()
     if latest_db:
-        return latest_db
+        return today_str if latest_db == today_str else latest_db
 
     # 数据库为空时退回上周五
+    weekday = today.weekday()
     days_since_friday = weekday - 4  # Sat=5→1, Sun=6→2
     last_friday = today - timedelta(days=days_since_friday)
     return last_friday.strftime("%Y-%m-%d")
@@ -1008,7 +1043,12 @@ def get_all_symbols() -> list[str]:
 
 def get_stock_name_map() -> dict[str, str]:
     """获取数据库中所有有名称的股票代码→名称映射。
-    优先从 stock_info 表，若为空则回退到实时行情缓存（screener）。"""
+    优先从 stock_info 表，若为空则回退到实时行情缓存（screener）。
+    结果带 TTL 缓存，数据同步后调用 invalidate_cache() 失效。"""
+    return _cached("stock_name_map", _CACHE_TTL, _stock_name_map_db)
+
+
+def _stock_name_map_db() -> dict[str, str]:
     conn = get_connection(read_only=True)
     try:
         if _table_exists(conn, "stock_info"):

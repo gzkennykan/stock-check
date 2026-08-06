@@ -1,7 +1,7 @@
 """Tab 5: 资金排名 — 资金净额/成交额 TOP50"""
 import streamlit as st
 from data.screener import get_fund_flow_data, get_stock_list, get_top_turnover
-from utils import fmt_yuan, search_stocks, format_stock_display
+from utils import fmt_yuan, search_stocks, format_stock_display, style_pct_col
 
 VIEWS = {
     "inflow": {"title": "资金净流入 TOP50", "source": "同花顺"},
@@ -82,6 +82,6 @@ def render():
         display = format_stock_display(display)
 
     st.dataframe(
-        display, width='stretch', hide_index=True,
+        style_pct_col(display.style, "涨跌幅(%)"), width='stretch', hide_index=True,
         column_config={"涨跌幅(%)": st.column_config.NumberColumn(format="%.2f%%")},
     )

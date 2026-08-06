@@ -124,6 +124,56 @@ HOT_STOCKS = {
     "比亚迪": "002594",
 }
 
+# =========================== 页面导航（侧边栏分组） ===========================
+# 17 个页面按「市场分析 / 策略研究 / 数据」分组，放侧边栏；
+# 每次只渲染当前选中的页面（st.navigation），比原先 17 个 tab 全渲染更快。
+
+from tabs.tab_workflow import render as render_wf
+from tabs.tab_ai import render as render_ai
+from tabs.tab1_backtest import render as render_tab1
+from tabs.tab2_compare import render as render_tab2
+from tabs.tab3_optimize import render as render_tab3
+from tabs.tab_performance import render as render_perf
+from tabs.tab_ml import render as render_ml
+from tabs.tab5_market_rank import render as render_tab4
+from tabs.tab_screener import render as render_sc
+from tabs.tab9_lhb import render as render_lhb
+from tabs.tab_watchlist import render as render_wl
+from tabs.tab11_portfolio import render as render_tab8
+from tabs.tab12_northbound import render as render_tab9
+from tabs.tab13_fundamental import render as render_tab10
+from tabs.tab14_industry import render as render_tab11
+from tabs.tab15_database import render as render_tab12
+from tabs.tab16_advanced import render as render_tab13
+
+PAGES = {
+    "📈 市场分析": [
+        st.Page(render_wf, title="选股工作流", icon="📋", url_path="workflow"),
+        st.Page(render_sc, title="智能选股", icon="🧠", url_path="screener"),
+        st.Page(render_tab4, title="资金排名", icon="💰", url_path="market-rank"),
+        st.Page(render_lhb, title="龙虎榜", icon="🐉", url_path="lhb"),
+        st.Page(render_wl, title="自选股", icon="⭐", url_path="watchlist"),
+        st.Page(render_tab11, title="市场全景", icon="🏭", url_path="industry"),
+        st.Page(render_tab9, title="北向&融资", icon="🌏", url_path="northbound"),
+        st.Page(render_tab10, title="财务分析", icon="📊", url_path="fundamental"),
+        st.Page(render_ai, title="AI智能分析", icon="🤖", url_path="ai"),
+    ],
+    "🧪 策略研究": [
+        st.Page(render_tab1, title="单策略回测", icon="📊", url_path="backtest"),
+        st.Page(render_tab2, title="策略对比", icon="📋", url_path="compare"),
+        st.Page(render_tab3, title="参数优化", icon="🔧", url_path="optimize"),
+        st.Page(render_perf, title="绩效分析", icon="📈", url_path="performance"),
+        st.Page(render_tab8, title="组合回测", icon="🧺", url_path="portfolio"),
+        st.Page(render_ml, title="ML因子研究", icon="🧠", url_path="ml"),
+        st.Page(render_tab13, title="高级分析", icon="🔬", url_path="advanced"),
+    ],
+    "🗄️ 数据": [
+        st.Page(render_tab12, title="数据中心", icon="🗄️", url_path="database"),
+    ],
+}
+
+pg = st.navigation(PAGES, position="sidebar")
+
 # =========================== 侧边栏 ===========================
 
 st.sidebar.title("📈 WinnerK股票量化系统")
@@ -341,86 +391,5 @@ last_run = sched_cfg.get("last_run", "")
 if last_run:
     st.sidebar.caption(f"上次执行: {last_run[:16]}")
 
-# =========================== 主区域 Tab 路由 ===========================
-
-tab_wf, tab_ai, tab1, tab2, tab3, tab_perf, tab_ml, tab4, tab_sc, tab_lhb, tab_wl, tab5, tab6, tab7, tab8, tab9, tab10 = st.tabs([
-    "📋 选股工作流",
-    "🤖 AI智能分析",
-    "📊 单策略回测", "📋 策略对比", "🔧 参数优化",
-    "📈 绩效分析",
-    "🧠 ML因子研究",
-    "💰 资金排名",
-    "🧠 智能选股", "🐉 龙虎榜",
-    "⭐ 自选股",
-    "🧺 组合回测", "🌏 北向&融资", "📊 财务分析", "🏭 市场全景",
-    "🗄️ 数据中心", "📊 高级分析",
-])
-
-from tabs.tab_workflow import render as render_wf
-from tabs.tab_ai import render as render_ai
-from tabs.tab1_backtest import render as render_tab1
-from tabs.tab2_compare import render as render_tab2
-from tabs.tab3_optimize import render as render_tab3
-from tabs.tab_performance import render as render_perf
-from tabs.tab_ml import render as render_ml
-from tabs.tab5_market_rank import render as render_tab4
-from tabs.tab_screener import render as render_sc
-from tabs.tab9_lhb import render as render_lhb
-from tabs.tab_watchlist import render as render_wl
-from tabs.tab11_portfolio import render as render_tab8
-from tabs.tab12_northbound import render as render_tab9
-from tabs.tab13_fundamental import render as render_tab10
-from tabs.tab14_industry import render as render_tab11
-from tabs.tab15_database import render as render_tab12
-from tabs.tab16_advanced import render as render_tab13
-
-with tab_wf:
-    render_wf()
-
-with tab_ai:
-    render_ai()
-
-with tab1:
-    render_tab1()
-
-with tab2:
-    render_tab2()
-
-with tab3:
-    render_tab3()
-
-with tab_perf:
-    render_perf()
-
-with tab_ml:
-    render_ml()
-
-with tab4:
-    render_tab4()
-
-with tab_sc:
-    render_sc()
-
-with tab_lhb:
-    render_lhb()
-
-with tab_wl:
-    render_wl()
-
-with tab5:
-    render_tab8()
-
-with tab6:
-    render_tab9()
-
-with tab7:
-    render_tab10()
-
-with tab8:
-    render_tab11()
-
-with tab9:
-    render_tab12()
-
-with tab10:
-    render_tab13()
+# =========================== 页面路由 ===========================
+pg.run()

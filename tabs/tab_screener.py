@@ -4,7 +4,7 @@ import pandas as pd
 from datetime import datetime
 from data.screener import get_combined_data, smart_screen, get_industry_list
 from data.factors import compute_upside_score
-from utils import fmt_yuan, format_stock_display
+from utils import fmt_yuan, format_stock_display, style_pct_col
 
 
 def _render_filter_mode(combined: pd.DataFrame):
@@ -201,7 +201,7 @@ def _render_upside_mode(combined: pd.DataFrame):
         display, extra_rename={"upside_score": "值博率", "pe": "PE(市盈率)"},
         drop_after=["main_capital"])
 
-    st.dataframe(display, width='stretch', hide_index=True,
+    st.dataframe(style_pct_col(display.style, "涨跌幅(%)"), width='stretch', hide_index=True,
         column_config={
             "涨跌幅(%)": st.column_config.NumberColumn(format="%.2f%%"),
             "值博率": st.column_config.ProgressColumn(format="%d", min_value=0, max_value=100),
@@ -251,7 +251,7 @@ def _render_result_table(result: pd.DataFrame):
             "roe", "gross_margin", "net_margin", "revenue_yoy", "profit_yoy", "debt_ratio"]
     display = display[[c for c in display.columns if c not in drop]]
 
-    st.dataframe(display, width='stretch', hide_index=True,
+    st.dataframe(style_pct_col(display.style, "涨跌幅(%)"), width='stretch', hide_index=True,
         column_config={
             "涨跌幅(%)": st.column_config.NumberColumn(format="%.2f%%"),
             "代码": st.column_config.TextColumn(width="small"),

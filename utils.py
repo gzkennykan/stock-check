@@ -282,3 +282,21 @@ def format_stock_display(df: pd.DataFrame,
         display = display[[c for c in display.columns if c not in drop_after]]
 
     return display
+
+
+def style_pct_col(style, col: str):
+    """给数值列加红涨绿跌着色（中国习惯：红涨绿跌），返回 Styler 供 st.dataframe 使用。
+
+    用法:
+        st.dataframe(style_pct_col(df.style, "涨跌幅(%)"), column_config={...})
+    """
+    if col not in style.data.columns:
+        return style
+    fn = (lambda v: "color:#E53935;font-weight:600"
+                    if v > 0
+                    else ("color:#43A047;font-weight:600" if v < 0 else ""))
+    # pandas >= 2.1 用 Styler.map，旧版本用 Styler.applymap
+    m = getattr(style, "map", None) or getattr(style, "applymap", None)
+    if m is None:
+        return style
+    return m(fn, subset=[col])

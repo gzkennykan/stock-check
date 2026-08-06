@@ -15,7 +15,7 @@ from pathlib import Path
 from utils import retry
 from data.database import (
     insert_fund_flow_snapshot, get_fund_flow_history,
-    get_fund_flow_latest_date,
+    get_fund_flow_latest_date, invalidate_cache,
 )
 
 
@@ -99,6 +99,8 @@ def sync_fund_flow_snapshot(force: bool = False) -> dict:
         return {"status": "error", "count": 0, "date": today,
                 "message": f"写入DB失败: {e}"}
 
+    # 写入成功 → 清除分析缓存，让 get_common_trading_date 等立即看到新数据
+    invalidate_cache()
     return {"status": "ok", "count": n, "date": today,
             "message": f"已保存 {n} 只股票资金流快照"}
 
