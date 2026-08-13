@@ -534,11 +534,11 @@ def get_combined_data(force_refresh: bool = False) -> pd.DataFrame:
         spot["code_raw"] = spot["code"]
     spot["code"] = spot["code"].astype(str).str.replace(r"^(sh|sz|bj)", "", regex=True)
 
-    # 2. 资金流数据
+    # 2. 资金流数据（turnover_rate 换手率来自新浪行情 spot，不在此覆盖，避免列名冲突）
     try:
         flow = get_fund_flow_data()
         flow_cols = [c for c in ["code", "main_capital", "capital_inflow",
-                                  "capital_outflow", "turnover_rate"] if c in flow.columns]
+                                  "capital_outflow"] if c in flow.columns]
         flow = flow[flow_cols]
     except Exception:
         flow = pd.DataFrame(columns=["code"])
@@ -567,8 +567,8 @@ def get_combined_data(force_refresh: bool = False) -> pd.DataFrame:
     merged = merged.merge(profit, on="code", how="left")
     merged["industry"] = merged["industry"].fillna("")
 
-    # 填充缺失的资金流数据
-    for col in ["main_capital", "capital_inflow", "capital_outflow", "turnover_rate"]:
+    # 填充缺失的资金流数据（turnover_rate 换手率属于行情，不做 0 填充）
+    for col in ["main_capital", "capital_inflow", "capital_outflow"]:
         if col in merged.columns:
             merged[col] = merged[col].fillna(0)
         else:
