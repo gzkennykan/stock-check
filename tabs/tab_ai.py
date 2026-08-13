@@ -12,6 +12,7 @@ from data.llm_analysis import (
 from data.database import get_stock_name_map
 from data.technicals import compute_full_analysis
 from data.fund_flow import get_fund_flow_summary
+from utils import round_df
 from data.fundamental import fetch_financial_indicators
 
 
@@ -371,7 +372,7 @@ def _render_batch_results(results: list):
     df = df.sort_values("评分", ascending=False).reset_index(drop=True)
 
     st.dataframe(
-        df,
+        round_df(df),
         width='stretch',
         hide_index=True,
         column_config={

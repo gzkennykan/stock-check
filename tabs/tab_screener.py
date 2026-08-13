@@ -204,6 +204,7 @@ def _render_upside_mode(combined: pd.DataFrame):
     st.dataframe(style_pct_col(display.style, "涨跌幅(%)"), width='stretch', hide_index=True,
         column_config={
             "涨跌幅(%)": st.column_config.NumberColumn(format="%.2f%%"),
+            "换手率(%)": st.column_config.NumberColumn(format="%.2f%%"),
             "值博率": st.column_config.ProgressColumn(format="%d", min_value=0, max_value=100),
             "代码": st.column_config.TextColumn(width="small"),
             "名称": st.column_config.TextColumn(width="small"),
@@ -247,13 +248,14 @@ def _render_result_table(result: pd.DataFrame):
             display[flabel] = display[fcol].apply(lambda x: f"{x:.1f}%" if pd.notna(x) else "N/A")
 
     display = format_stock_display(display, extra_rename={"pe": "PE(市盈率)", "pb": "PB(市净率)"})
-    drop = ["main_capital", "capital_inflow", "capital_outflow", "market_cap",
+    drop = ["main_capital", "capital_inflow", "capital_outflow", "总市值",
             "roe", "gross_margin", "net_margin", "revenue_yoy", "profit_yoy", "debt_ratio"]
     display = display[[c for c in display.columns if c not in drop]]
 
     st.dataframe(style_pct_col(display.style, "涨跌幅(%)"), width='stretch', hide_index=True,
         column_config={
             "涨跌幅(%)": st.column_config.NumberColumn(format="%.2f%%"),
+            "换手率(%)": st.column_config.NumberColumn(format="%.2f%%"),
             "代码": st.column_config.TextColumn(width="small"),
             "名称": st.column_config.TextColumn(width="small"),
         })

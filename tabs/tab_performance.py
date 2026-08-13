@@ -8,6 +8,7 @@ from data.performance import (
     compute_metrics, compute_rolling_metrics, compute_trade_distribution,
     _compute_monthly_returns,
 )
+from utils import round_df
 
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
@@ -204,9 +205,9 @@ def render():
 
         # 年度汇总
         if "年度收益%" in monthly.columns:
-            st.dataframe(monthly, width='stretch')
+            st.dataframe(round_df(monthly), width='stretch')
         else:
-            st.dataframe(monthly, width='stretch')
+            st.dataframe(round_df(monthly), width='stretch')
 
     # ══════════════════════════════════════════
     # 4. 滚动指标（稳定性分析）

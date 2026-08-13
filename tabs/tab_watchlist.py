@@ -8,6 +8,7 @@ from data.database import (
     add_to_watchlist, remove_from_watchlist, get_watchlist, get_stock_name_map,
 )
 from data.screener import get_stock_list
+from utils import round_df
 
 
 @st.cache_data(ttl=60)
@@ -135,6 +136,8 @@ def render():
         "pe": "PE", "market_cap": "市值",
         "note": "备注",
     })
+
+    display = round_df(display)
 
     # 彩色高亮
     def _color_pct(val):

@@ -8,6 +8,7 @@ from data.ml_factors import (
     train_lightgbm_ranker, stratified_backtest,
 )
 from data.database import today_or_latest_trading_day
+from utils import round_df
 
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
@@ -103,7 +104,7 @@ def render():
                     )
                     st.plotly_chart(fig, width='stretch')
 
-                st.dataframe(ic_df, width='stretch', hide_index=True)
+                st.dataframe(round_df(ic_df), width='stretch', hide_index=True)
                 st.caption("💡 IC_IR > 0.5 = 良好，IC_IR > 1.0 = 优秀")
 
     # ══════════════════════════════════════════
@@ -156,7 +157,7 @@ def render():
                             })
                 if high_corr:
                     st.warning(f"⚠️ 发现 {len(high_corr)} 对高相关因子(>0.7)，建议合并")
-                    st.dataframe(pd.DataFrame(high_corr), width='stretch', hide_index=True)
+                    st.dataframe(round_df(pd.DataFrame(high_corr)), width='stretch', hide_index=True)
 
     # ══════════════════════════════════════════
     # Tab 3: LightGBM 排序模型
@@ -201,7 +202,7 @@ def render():
                     height=350, margin=dict(l=20, r=20, t=40, b=80),
                 )
                 st.plotly_chart(fig, width='stretch')
-                st.dataframe(imp, width='stretch', hide_index=True)
+                st.dataframe(round_df(imp), width='stretch', hide_index=True)
 
     # ══════════════════════════════════════════
     # Tab 4: 分层回测
@@ -287,6 +288,6 @@ def _render_stratified(strat_df: pd.DataFrame, source_name: str):
         else:
             st.error(f"❌ 无单调性：Top-Bottom spread = {s:.1f}%（因子无效）")
 
-    st.dataframe(strat_df, width='stretch', hide_index=True)
+    st.dataframe(round_df(strat_df), width='stretch', hide_index=True)
     st.caption(f"排序因子: {source_name} | 预测周期: 20日")
     st.caption("⚠️ 分层回测样本仅含当前仍在交易的股票，未纳入已退市股票（幸存者偏差），收益可能系统性高估。")

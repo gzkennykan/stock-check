@@ -241,17 +241,10 @@ def format_stock_display(df: pd.DataFrame,
     """
     display = df.copy()
 
-    # round
-    if "price" in display.columns:
-        display["price"] = display["price"].round(2)
-    if "pct_change" in display.columns:
-        display["pct_change"] = display["pct_change"].round(2)
-    if "turnover_rate" in display.columns:
-        display["turnover_rate"] = display["turnover_rate"].round(2)
-    if "pe" in display.columns:
-        display["pe"] = display["pe"].round(1)
-    if "pb" in display.columns:
-        display["pb"] = display["pb"].round(2)
+    # 数值统一：所有 float 列保留两位小数（金额/百分比列在下方已转字符串，不受影响）
+    for _col in display.columns:
+        if pd.api.types.is_float_dtype(display[_col]):
+            display[_col] = display[_col].round(2)
 
     # money formatting
     if money_cols:
@@ -282,6 +275,18 @@ def format_stock_display(df: pd.DataFrame,
         display = display[[c for c in display.columns if c not in drop_after]]
 
     return display
+
+
+def round_df(df: pd.DataFrame, decimals: int = 2) -> pd.DataFrame:
+    """复制 DataFrame，将所有 float 列四舍五入到指定小数位（字符串/整数/日期列不变）。
+
+    用于 st.dataframe 展示前统一数值精度，不修改原 df。
+    """
+    out = df.copy()
+    for c in out.columns:
+        if pd.api.types.is_float_dtype(out[c]):
+            out[c] = out[c].round(decimals)
+    return out
 
 
 def style_pct_col(style, col: str):

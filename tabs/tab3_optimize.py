@@ -2,6 +2,7 @@
 import streamlit as st
 import pandas as pd
 from backtest_utils import load_data, optuna_objective, get_stock_name
+from utils import round_df
 from visualization.plotly_charts import plot_optimization_history
 
 
@@ -167,4 +168,4 @@ def render():
                 display_val = f"{v:.2f}" if isinstance(v, float) else str(v)
                 st.metric(label, display_val)
 
-        st.dataframe(trials_df.head(10), width='stretch', hide_index=True)
+        st.dataframe(round_df(trials_df.head(10)), width='stretch', hide_index=True)

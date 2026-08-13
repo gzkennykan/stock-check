@@ -2,7 +2,7 @@
 import streamlit as st
 import pandas as pd
 from data.fundamental import fetch_financial_indicators, fetch_performance_forecast
-from utils import fmt_yuan
+from utils import fmt_yuan, round_df
 
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
@@ -202,4 +202,4 @@ def render():
                 }
                 </style>
                 """)
-                st.dataframe(fdf.head(100), width='stretch', hide_index=True)
+                st.dataframe(round_df(fdf.head(100)), width='stretch', hide_index=True)

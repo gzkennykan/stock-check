@@ -3,7 +3,7 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime
 from data.lhb import get_lhb_daily, get_lhb_seat_detail
-from utils import fmt_wan, latest_trading_day, is_weekend
+from utils import fmt_wan, latest_trading_day, is_weekend, round_df
 
 
 def _fmt_zt_time(val):
@@ -102,7 +102,7 @@ def render():
                 show_cols = [c for c in show_cols if c in tbl_display.columns]
 
                 st.dataframe(
-                    tbl_display[show_cols],
+                    round_df(tbl_display[show_cols]),
                     width='stretch',
                     hide_index=True,
                     column_config={
@@ -265,7 +265,7 @@ def render():
                 })
 
                 st.dataframe(
-                    show,
+                    round_df(show),
                     width='stretch',
                     hide_index=True,
                     column_config={
@@ -297,7 +297,7 @@ def render():
                     "consecutive_days": "连板天数", "industry": "行业",
                 })
                 st.dataframe(
-                    strong_display,
+                    round_df(strong_display),
                     width='stretch',
                     hide_index=True,
                     column_config={
@@ -359,7 +359,7 @@ def render():
             })
 
             st.dataframe(
-                b_display,
+                round_df(b_display),
                 width='stretch',
                 hide_index=True,
                 column_config={

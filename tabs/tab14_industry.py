@@ -9,6 +9,7 @@ from data.industry import (
 
 import plotly.graph_objects as go
 from visualization.plotly_charts import plot_horizontal_bars
+from utils import round_df
 
 
 @st.cache_data(ttl=300)
@@ -103,7 +104,7 @@ def render():
 
             # 表格
             with st.expander("📋 查看原始数据"):
-                st.dataframe(spot, width='stretch', hide_index=True)
+                st.dataframe(round_df(spot), width='stretch', hide_index=True)
 
     # ── Tab 2: 行业成分股 ──
     with tab_i2:
@@ -130,7 +131,7 @@ def render():
                 if not isinstance(stocks_data, bool) and hasattr(stocks_data, '__len__'):
                     st.caption(f"「{st.session_state.get('ind_stocks_name', '')}」成分股 — "
                                f"共 {len(stocks_data)} 只")
-                    st.dataframe(stocks_data, width='stretch', hide_index=True)
+                    st.dataframe(round_df(stocks_data), width='stretch', hide_index=True)
 
     # ══════════════════════════════════════════
     # Tab 3: 市场宽度 ✨
@@ -484,7 +485,7 @@ def render():
             try:
                 stocks = fetch_industry_stocks(selected_industry)
                 if stocks:
-                    st.dataframe(pd.DataFrame(stocks), width='stretch', hide_index=True)
+                    st.dataframe(round_df(pd.DataFrame(stocks)), width='stretch', hide_index=True)
                 else:
                     st.info("该行业暂无成分股数据")
             except Exception as e:

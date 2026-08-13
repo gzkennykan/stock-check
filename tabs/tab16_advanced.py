@@ -5,6 +5,7 @@ import numpy as np
 from datetime import datetime
 
 from data.database import get_latest_trading_date, get_stocks_in_db, get_stock_name_map, today_or_latest_trading_day
+from utils import round_df
 from data.factors import compute_composite_ranking
 from data.correlation import (
     compute_full_correlation_matrix, find_low_correlation_pairs,
@@ -286,7 +287,7 @@ def _render_industry_rotation():
                     "ret_5d": "5日%", "ret_10d": "10日%",
                     "ret_20d": "20日%", "ret_60d": "60日%",
                 })
-                st.dataframe(display, width='stretch', hide_index=True)
+                st.dataframe(round_df(display), width='stretch', hide_index=True)
 
     # ── 行业轮动热力图 ──
     st.markdown("---")
@@ -444,13 +445,13 @@ def _render_correlation():
         st.markdown("**低相关对（最优组合）**")
         low = find_low_correlation_pairs(corr, 10)
         if not low.empty:
-            st.dataframe(low.rename(columns={"stock_a": "A", "stock_b": "B", "correlation": "相关度"}),
+            st.dataframe(round_df(low.rename(columns={"stock_a": "A", "stock_b": "B", "correlation": "相关度"})),
                          width='stretch', hide_index=True)
     with col_b:
         st.markdown("**对冲对（负相关>0.3）**")
         hedge = find_hedge_pairs(corr, 10)
         if not hedge.empty:
-            st.dataframe(hedge.rename(columns={"stock_a": "A", "stock_b": "B", "correlation": "负相关"}),
+            st.dataframe(round_df(hedge.rename(columns={"stock_a": "A", "stock_b": "B", "correlation": "负相关"})),
                          width='stretch', hide_index=True)
 
     # 聚类
@@ -558,7 +559,7 @@ def _render_batch_backtest():
         "symbol": "代码", "rank": "排名", "total_return": "总收益%",
         "sharpe": "夏普", "max_dd": "最大回撤%", "win_rate": "胜率%", "trades": "交易数",
     })
-    st.dataframe(display, width='stretch', hide_index=True)
+    st.dataframe(round_df(display), width='stretch', hide_index=True)
 
 
 # ══════════════════════════════════════════════════
@@ -616,7 +617,7 @@ def _render_quant_signals():
             events = detect_market_extremes(bd)
             if not events.empty:
                 with st.expander(f"近期顶底信号 ({len(events)} 次)"):
-                    st.dataframe(events, width='stretch', hide_index=True)
+                    st.dataframe(round_df(events), width='stretch', hide_index=True)
 
     st.markdown("---")
 
@@ -636,7 +637,7 @@ def _render_quant_signals():
                 "period": "周期", "top": "高分组%", "bottom": "低分组%",
                 "spread": "超额收益%", "factor_valid": "有效",
             })
-            st.dataframe(display, width='stretch', hide_index=True)
+            st.dataframe(round_df(display), width='stretch', hide_index=True)
             valid_count = fbt["factor_valid"].sum() if "factor_valid" in fbt.columns else 0
             if valid_count > 0:
                 st.success(f"因子在 {valid_count}/{len(fbt)} 个周期有效（高分组合>低分组）")
@@ -770,7 +771,7 @@ def _render_fund_flow():
         })
 
         st.dataframe(
-            tbl, width='stretch', hide_index=True,
+            round_df(tbl), width='stretch', hide_index=True,
             column_config={
                 "涨跌幅(%)": st.column_config.NumberColumn(format="%+.2f%%"),
             },

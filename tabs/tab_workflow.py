@@ -11,7 +11,7 @@ from data.patterns import run_all_patterns
 from data.factors import compute_composite_ranking
 from data.industry_db import compute_industry_momentum, get_industry_list_from_db
 from data.database import get_stock_name_map
-from utils import fmt_yuan, parse_cn_money
+from utils import fmt_yuan, parse_cn_money, round_df
 
 
 _VALID_STOCK_CODES: set = None  # lazy cache
@@ -345,8 +345,8 @@ def render():
                 "pct_change": "涨跌幅(%)", "break_count": "炸板",
                 "industry": "行业",
             })
-            st.dataframe(show[[c for c in ["代码", "名称", "最新价", "涨跌幅(%)",
-                            "封板时间", "封单(万)", "炸板", "行业"] if c in show.columns]],
+            st.dataframe(round_df(show[[c for c in ["代码", "名称", "最新价", "涨跌幅(%)",
+                            "封板时间", "封单(万)", "炸板", "行业"] if c in show.columns]]),
                          width='stretch', hide_index=True)
             st.caption(f"✅ {len(st.session_state.wf_candidates)} 只进入候选池")
         else:
@@ -380,7 +380,7 @@ def render():
                 "_in_overlap": "标记", "code": "代码", "name": "名称",
                 "price": "最新价", "pct_change": "涨跌幅(%)",
             })
-            st.dataframe(show, width='stretch', hide_index=True)
+            st.dataframe(round_df(show), width='stretch', hide_index=True)
             st.caption("🔥 = 同时出现在涨停池和资金TOP20中")
         else:
             st.info("👆 点击加载资金排名")
@@ -414,7 +414,7 @@ def render():
                             show["名称"] = show["symbol"].map(names).fillna("")
                             cols = [c for c in ["symbol", "名称"] if c in show.columns]
                             show = show[cols]
-                        st.dataframe(show, width='stretch', hide_index=True)
+                        st.dataframe(round_df(show), width='stretch', hide_index=True)
         else:
             st.info("👆 点击扫描异动")
 
@@ -448,7 +448,7 @@ def render():
                         show = df.head(10).copy()
                         if "symbol" in show.columns:
                             show["名称"] = show["symbol"].map(names).fillna("")
-                        st.dataframe(show, width='stretch', hide_index=True)
+                        st.dataframe(round_df(show), width='stretch', hide_index=True)
             else:
                 st.info("未发现看涨形态")
         else:
@@ -478,7 +478,7 @@ def render():
                 if isinstance(df, pd.DataFrame) and not df.empty:
                     if any(kw in name for kw in ["金叉", "突破", "volume_breakout"]):
                         with st.expander(f"📈 {name} ({len(df)} 条)", expanded=False):
-                            st.dataframe(df.head(10), width='stretch', hide_index=True)
+                            st.dataframe(round_df(df.head(10)), width='stretch', hide_index=True)
         else:
             st.info("👆 点击扫描技术形态")
 
@@ -507,7 +507,7 @@ def render():
             show["名称"] = show["symbol"].map(names).fillna("")
             if "symbol" in show.columns:
                 show["symbol"] = show["symbol"].astype(str)
-            st.dataframe(show, width='stretch', hide_index=True)
+            st.dataframe(round_df(show), width='stretch', hide_index=True)
             st.caption(f"✅ 候选池累计: {len(st.session_state.wf_candidates)} 只")
         else:
             st.info("👆 点击计算排名")
@@ -532,7 +532,7 @@ def render():
 
         momentum = st.session_state.get("wf_industry_momentum")
         if momentum is not None and not momentum.empty:
-            st.dataframe(momentum.head(20), width='stretch', hide_index=True)
+            st.dataframe(round_df(momentum.head(20)), width='stretch', hide_index=True)
         else:
             st.info("👆 点击查看行业动量")
 
@@ -886,7 +886,7 @@ def _run_deep_diagnostics(codes: list, name_map: dict, silent: bool = False):
     display = display.rename(columns={k: v for k, v in rename.items() if k in display.columns})
 
     st.dataframe(
-        display,
+        round_df(display),
         width='stretch',
         hide_index=True,
         column_config={
