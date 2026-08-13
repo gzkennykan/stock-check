@@ -197,6 +197,28 @@ def _ensure_tables(conn) -> None:
         CREATE INDEX IF NOT EXISTS idx_mlfc_date ON ml_factor_cache(trade_date)
     """)
 
+    # ── 复权因子（前复权 = 原始价 / factor，事件级稀疏存储）──
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS adjust_factor (
+            symbol      VARCHAR(10)  NOT NULL,
+            trade_date  DATE         NOT NULL,
+            factor      DOUBLE       NOT NULL,
+            PRIMARY KEY (symbol, trade_date)
+        )
+    """)
+    conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_adjust_factor_symbol ON adjust_factor(symbol, trade_date)
+    """)
+
+    # ── 前复权回填进度（断点续传：记录已完成股票）──
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS qfq_backfill_log (
+            symbol        VARCHAR(10) PRIMARY KEY,
+            done_at       TIMESTAMP    DEFAULT CURRENT_TIMESTAMP,
+            factor_anchor DATE
+        )
+    """)
+
     # ── 行业板块实时行情 ──
     conn.execute("""
         CREATE TABLE IF NOT EXISTS industry_spot (
@@ -485,6 +507,172 @@ def delete_kline(symbol: str, before_date: str = None) -> int:
         return result.fetchall()[0][0] if result else 0
     finally:
         conn.close()
+
+
+# ════════════════ 复权因子 & 前复权回填（方案B） ════════════════
+
+def _symbol_to_sina(symbol: str) -> str:
+    """6 位代码 → 新浪格式 sh600036 / sz000001 / bj8xxxxx"""
+    s = str(symbol).strip().zfill(6)
+    if s.startswith(("6", "5", "9")):
+        return f"sh{s}"
+    elif s.startswith(("0", "3", "2")):
+        return f"sz{s}"
+    elif s.startswith(("4", "8")):
+        return f"bj{s}"
+    return s
+
+
+class NoFactorData(Exception):
+    """新浪无该股数据或复权因子（退市/指数/特殊代码），无需复权（原始价即前复权价）。"""
+
+
+def fetch_adjust_factor(symbol: str) -> pd.DataFrame | None:
+    """
+    从 AKShare 拉取前复权因子（date, factor，事件级稀疏）。
+
+    返回按 date 升序的 DataFrame；
+    - 新浪无此股数据/无复权因子 → 抛 NoFactorData（调用方标记「无需复权」）
+    - 网络/临时错误 → 返回 None（调用方保留待重试）
+    """
+    import akshare as ak
+    try:
+        raw = ak.stock_zh_a_daily(
+            symbol=_symbol_to_sina(symbol),
+            start_date="19900101",
+            end_date=datetime.now().strftime("%Y%m%d"),
+            adjust="qfq-factor",
+        )
+    except (SyntaxError, ValueError):
+        # SyntaxError: 新浪对退市/特殊代码返回空/异常数据，AKShare 解析失败
+        # ValueError: "sina hfq factor not available" 等 —— 无复权因子
+        raise NoFactorData(symbol)
+    except Exception:
+        return None
+    if raw is None or raw.empty:
+        # 返回空：无除权事件（如新股），也无需复权
+        raise NoFactorData(symbol)
+    df = raw.copy()
+    df["date"] = pd.to_datetime(df["date"]).astype("datetime64[ns]")
+    df["factor"] = pd.to_numeric(df["qfq_factor"], errors="coerce")
+    df = df.dropna(subset=["factor"])
+    if "qfq_factor" in df.columns:
+        df = df.drop(columns=["qfq_factor"])
+    return df[["date", "factor"]].sort_values("date").reset_index(drop=True)
+
+
+def apply_qfq_factor(kline: pd.DataFrame, factor_df: pd.DataFrame) -> pd.DataFrame:
+    """
+    将前复权因子应用到原始 OHLC：前复权价 = 原始价 / 因子（仅缩放价格，volume/amount 不变）。
+    kline: index 为 trade_date，含 open/high/low/close
+    factor_df: 含 date, factor（升序，事件级）
+    """
+    if kline.empty or factor_df is None or factor_df.empty:
+        return kline
+    df = kline.copy()
+    idx = pd.DataFrame({"date": df.index}).reset_index(drop=True)
+    idx["date"] = pd.to_datetime(idx["date"]).astype("datetime64[ns]")
+    m = pd.merge_asof(idx, factor_df, on="date", direction="backward")
+    factor = pd.Series(m["factor"].values, index=df.index)
+    for col in ("open", "high", "low", "close"):
+        if col in df.columns:
+            df[col] = (df[col] / factor).round(4)
+    return df
+
+
+def backfill_qfq(symbols: list[str] | None = None, resume: bool = True,
+                 progress_cb=None, max_stocks: int | None = None) -> dict:
+    """
+    一次性前复权回填（方案B：本地原始价复用 + 网络只拉因子）。
+    1) 每只股票拉取前复权因子（AKShare qfq-factor）
+    2) 本地合成：前复权 = 原始价 / 因子
+    3) 覆盖 daily_kline（source='akshare_qfq'），因子落 adjust_factor 表
+    断点续传：resume=True 时跳过 qfq_backfill_log 中已完成的股票。
+
+    返回: {"done": N, "skipped": N, "errors": [...], "total": N}
+    """
+    import time as _t
+
+    if symbols is None:
+        symbols = [s for s in get_all_symbols() if is_target_stock(s)]
+    if max_stocks:
+        symbols = symbols[:max_stocks]
+
+    done = 0
+    no_adjust = 0
+    skipped = 0
+    errors: list[str] = []
+    conn = get_connection()
+    _ensure_tables(conn)
+
+    done_set: set[str] = set()
+    if resume:
+        done_set = {r[0] for r in conn.execute("SELECT symbol FROM qfq_backfill_log").fetchall()}
+
+    total = len(symbols)
+    for i, sym in enumerate(symbols):
+        if resume and sym in done_set:
+            skipped += 1
+            if progress_cb:
+                progress_cb(i + 1, total, sym, "skip")
+            continue
+        try:
+            factor_df = fetch_adjust_factor(sym)
+            if factor_df is None:
+                errors.append(f"{sym}: 因子获取失败（网络/临时错误，可重试）")
+                if progress_cb:
+                    progress_cb(i + 1, total, sym, "no_factor")
+                continue
+
+            raw = conn.execute(
+                "SELECT trade_date, open, high, low, close, volume, amount "
+                "FROM daily_kline WHERE symbol = ? ORDER BY trade_date", [sym]
+            ).df()
+            if raw is None or raw.empty:
+                errors.append(f"{sym}: 无原始K线")
+                continue
+            raw["trade_date"] = pd.to_datetime(raw["trade_date"])
+            raw = raw.set_index("trade_date")
+
+            qfq = apply_qfq_factor(raw, factor_df)
+
+            # 因子落 adjust_factor 表（覆盖旧值）
+            conn.execute("DELETE FROM adjust_factor WHERE symbol = ?", [sym])
+            for _, r in factor_df.iterrows():
+                conn.execute(
+                    "INSERT INTO adjust_factor (symbol, trade_date, factor) VALUES (?, ?, ?)",
+                    [sym, r["date"].date(), float(r["factor"])]
+                )
+
+            # 覆盖 daily_kline（保留 amount）
+            insert_kline(sym, qfq, source="akshare_qfq")
+
+            anchor = factor_df["date"].iloc[0]
+            conn.execute(
+                "INSERT OR REPLACE INTO qfq_backfill_log (symbol, done_at, factor_anchor) "
+                "VALUES (?, CURRENT_TIMESTAMP, ?)",
+                [sym, str(anchor.date())]
+            )
+            done += 1
+            if progress_cb:
+                progress_cb(i + 1, total, sym, "+qfq")
+            _t.sleep(0.15)
+        except NoFactorData:
+            # 新浪无此股数据/无复权因子 → 无需复权（原始价即前复权价），标记完成
+            conn.execute(
+                "INSERT OR REPLACE INTO qfq_backfill_log (symbol, done_at, factor_anchor) "
+                "VALUES (?, CURRENT_TIMESTAMP, NULL)", [sym]
+            )
+            no_adjust += 1
+            if progress_cb:
+                progress_cb(i + 1, total, sym, "无复权")
+        except Exception as e:
+            errors.append(f"{sym}: {e}")
+            if progress_cb:
+                progress_cb(i + 1, total, sym, "err")
+
+    return {"done": done, "no_adjust": no_adjust, "skipped": skipped,
+            "errors": errors, "total": total}
 
 
 # ────────────────────────── 资金流向快照 ──────────────────────────

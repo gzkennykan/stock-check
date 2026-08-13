@@ -1,7 +1,7 @@
 """Tab 2: 多策略对比"""
 import streamlit as st
 import pandas as pd
-from backtest_utils import load_data, get_equity_curve, get_daily_returns, get_trade_list
+from backtest_utils import load_data, get_equity_curve, get_daily_returns, get_trade_list, get_stock_name
 from backtest.engine import run_multi_backtest
 from analysis.metrics import compute_metrics
 from visualization.plotly_charts import plot_comparison_chart, plot_comparison_curves
@@ -50,7 +50,8 @@ def render():
             strategy_map[name] = (cls, {})
 
         with st.spinner("运行所有策略..."):
-            results = run_multi_backtest(strategy_map, df)
+            results = run_multi_backtest(strategy_map, df,
+                                         symbol=str(symbol).zfill(6), name=get_stock_name(symbol))
 
         rows = []
         curves = {}

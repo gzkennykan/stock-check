@@ -40,7 +40,7 @@ def run_sector_backtest(
             if df.empty or len(df) < 50:
                 continue
 
-            result = run_backtest(strategy_cls, df, params)
+            result = run_backtest(strategy_cls, df, params, symbol=str(sym).zfill(6))
             if "error" in result:
                 continue
 

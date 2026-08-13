@@ -258,6 +258,8 @@ def _render_result_table(result: pd.DataFrame):
             "名称": st.column_config.TextColumn(width="small"),
         })
 
+    st.caption("⚠️ 样本仅含当前仍在交易的股票，未纳入已退市股票（幸存者偏差），历史收益可能系统性高估。")
+
     csv_data = result.to_csv(index=False).encode("utf-8-sig")
     st.download_button("📥 导出 CSV", data=csv_data,
         file_name=f"screener_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv", mime="text/csv")

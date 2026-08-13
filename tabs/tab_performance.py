@@ -16,6 +16,7 @@ from plotly.subplots import make_subplots
 def render():
     st.title("📊 绩效分析")
     st.caption("专业回测绩效报告 — Sharpe/Calmar/最大回撤/月度热力图/交易分布")
+    st.caption("⚠️ 回测样本仅含当前仍在交易的股票，未纳入已退市股票（幸存者偏差），历史收益可能系统性高估。")
 
     # ── 数据源选择 ──
     src_col1, src_col2 = st.columns([2, 3])

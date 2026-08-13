@@ -195,11 +195,36 @@ def _main():
                         help="数据源（默认 akshare）")
     parser.add_argument("--tdx-path", type=str, default=None,
                         help="通达信 vipdoc 路径（仅 --source=tdx 时有效）")
+    parser.add_argument("--backfill-qfq", action="store_true",
+                        help="一次性前复权回填：拉取复权因子，本地合成前复权覆盖 daily_kline")
+    parser.add_argument("--qfq-symbols", type=str, default=None,
+                        help="指定回填的股票代码，逗号分隔（默认全部四大板块）")
     args = parser.parse_args()
 
     symbols = None
     if args.symbols:
         symbols = [s.strip() for s in args.symbols.split(",")]
+
+    # ── 前复权回填（方案B）──
+    if args.backfill_qfq:
+        from .database import backfill_qfq
+        qfq_symbols = None
+        if args.qfq_symbols:
+            qfq_symbols = [s.strip() for s in args.qfq_symbols.split(",")]
+        print("=" * 60)
+        print("  前复权回填（方案B：拉因子 + 本地合成）")
+        print("=" * 60)
+        result = backfill_qfq(
+            symbols=qfq_symbols, resume=True,
+            progress_cb=lambda c, t, s, st: print(f"  [{c}/{t}] {s}  {st}"),
+        )
+        print()
+        print(f"✅ 完成: {result['done']} 只  |  无需复权: {result.get('no_adjust', 0)} 只  |  跳过: {result['skipped']} 只")
+        if result["errors"]:
+            print(f"⚠️ 错误 ({len(result['errors'])}):")
+            for e in result["errors"][:10]:
+                print(f"  {e}")
+        return
 
     print("=" * 60)
     print("  数据同步工具")

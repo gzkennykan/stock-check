@@ -38,7 +38,8 @@ class CerebroBuilder:
         return self.cerebro
 
 
-def run_backtest(strategy_cls, df: pd.DataFrame, strategy_params: dict | None = None) -> dict:
+def run_backtest(strategy_cls, df: pd.DataFrame, strategy_params: dict | None = None,
+                 symbol: str = "", name: str = "") -> dict:
     """
     运行单次回测，返回结果字典。
 
@@ -46,12 +47,16 @@ def run_backtest(strategy_cls, df: pd.DataFrame, strategy_params: dict | None = 
         strategy_cls: 策略类
         df: 行情数据 DataFrame (需包含 open/high/low/close/volume)
         strategy_params: 策略参数字典
+        symbol: 股票代码（用于涨跌停幅度判断）
+        name: 股票名称（用于 ST 识别）
     返回:
         包含策略实例、分析器结果、最终资金的字典
     """
     builder = CerebroBuilder()
     builder.add_data(df)
-    kwargs = strategy_params or {}
+    kwargs = dict(strategy_params or {})
+    kwargs.setdefault("symbol", symbol)
+    kwargs.setdefault("name", name)
     builder.add_strategy(strategy_cls, **kwargs)
     cerebro = builder.build()
 
@@ -75,20 +80,23 @@ def run_backtest(strategy_cls, df: pd.DataFrame, strategy_params: dict | None = 
     }
 
 
-def run_multi_backtest(strategy_map: dict, df: pd.DataFrame) -> dict[str, dict]:
+def run_multi_backtest(strategy_map: dict, df: pd.DataFrame,
+                       symbol: str = "", name: str = "") -> dict[str, dict]:
     """
     运行多策略回测对比。
 
     参数:
         strategy_map: {"策略名": (策略类, 参数字典)}  e.g. {"MACross": (MACrossStrategy, {"fast": 5} ...)}
         df: 行情数据
+        symbol: 股票代码（涨跌停幅度判断）
+        name: 股票名称
     返回:
         {"策略名": 结果字典, ...}
     """
     results = {}
     for name, (cls, params) in strategy_map.items():
         print(f"\n{'='*50}\n运行策略: {name}\n{'='*50}")
-        results[name] = run_backtest(cls, df, params)
+        results[name] = run_backtest(cls, df, params, symbol=symbol, name=name)
     return results
 
 

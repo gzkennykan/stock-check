@@ -1,7 +1,7 @@
 """Tab 3: 参数优化 — Optuna 网格搜索，支持全部8个策略"""
 import streamlit as st
 import pandas as pd
-from backtest_utils import load_data, optuna_objective
+from backtest_utils import load_data, optuna_objective, get_stock_name
 from visualization.plotly_charts import plot_optimization_history
 
 
@@ -143,7 +143,8 @@ def render():
             study = optuna.create_study(direction="maximize")
             study.optimize(
                 lambda trial: optuna_objective(
-                    trial, strategy_cls, df, user_param_configs, target_map[opt_target]
+                    trial, strategy_cls, df, user_param_configs, target_map[opt_target],
+                    symbol=str(symbol).zfill(6), name=get_stock_name(symbol)
                 ),
                 n_trials=n_trials,
                 callbacks=[StreamlitCallback(n_trials)],

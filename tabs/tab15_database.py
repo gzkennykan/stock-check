@@ -7,7 +7,7 @@ from data.database import (
     get_db_stats, get_stocks_in_db, get_kline, search_kline,
     insert_kline, insert_kline_batch, upsert_stock_info,
     delete_kline, delete_non_target_stocks, get_board_stats,
-    get_connection, today_or_latest_trading_day,
+    get_connection, today_or_latest_trading_day, backfill_qfq,
 )
 from data.fetcher import fetch_data, _detect_source
 from data.import_csv import _find_kline_csvs, import_csv_to_db
@@ -499,6 +499,67 @@ def _render_sync():
     )
 
 
+def _render_qfq_backfill():
+    """前复权回填面板（方案B：拉因子 + 本地合成前复权）"""
+    st.subheader("🔧 前复权回填")
+    st.caption(
+        "统一价格口径为前复权：网络只拉每只股票的复权因子，"
+        "本地合成「前复权 = 原始价 ÷ 因子」。"
+    )
+
+    conn = get_connection()
+    total = done = 0
+    try:
+        total = conn.execute("SELECT COUNT(DISTINCT symbol) FROM daily_kline").fetchone()[0]
+        done = conn.execute("SELECT COUNT(*) FROM qfq_backfill_log").fetchone()[0]
+    except Exception:
+        pass
+
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("在库股票", f"{total:,}")
+    with col2:
+        st.metric("已回填", f"{done:,}")
+    with col3:
+        st.metric("待回填", f"{max(total - done, 0):,}")
+
+    if total == 0:
+        st.info("数据库为空，请先导入数据")
+        return
+
+    remaining = max(total - done, 0)
+
+    if remaining == 0:
+        st.success("✅ 全部股票已完成前复权回填")
+        if st.button("🔄 清除进度并重新回填", key="qfq_reset"):
+            conn.execute("DELETE FROM qfq_backfill_log")
+            st.rerun()
+        return
+
+    st.warning(f"还有 {remaining:,} 只股票未回填（首次运行约 20-40 分钟）")
+
+    if st.button("🚀 开始回填", type="primary", key="qfq_backfill_btn", width='stretch'):
+        with st.spinner("回填中（约 20-40 分钟，中断后可重新点击续传）..."):
+            progress = st.progress(0)
+            status = st.empty()
+
+            def on_progress(cur, tot, sym, st_msg):
+                progress.progress(cur / tot)
+                if cur % 100 == 0:
+                    status.text(f"[{cur}/{tot}] {sym} {st_msg}")
+
+            result = backfill_qfq(resume=True, progress_cb=on_progress)
+            progress.empty()
+            status.empty()
+
+        st.success(f"回填完成: 成功 {result['done']} 只, 无需复权 {result.get('no_adjust', 0)} 只, 跳过 {result['skipped']} 只")
+        if result["errors"]:
+            with st.expander(f"错误详情 ({len(result['errors'])})"):
+                for e in result["errors"][:30]:
+                    st.warning(e)
+        st.rerun()
+
+
 def _render_management():
     """渲染数据管理（删除等）"""
     st.subheader("🗑️ 数据管理")
@@ -558,8 +619,8 @@ def render():
     st.title("🗄️ 数据中心")
     st.caption("本地 DuckDB 数据库 — 高性能历史数据分析引擎")
 
-    sub1, sub2, sub3, sub4, sub5, sub6, sub7 = st.tabs([
-        "📊 概览", "📋 股票列表", "🔄 日常同步", "📥 批量下载", "📦 CSV导入", "📡 TDX导入", "🔍 SQL查询"
+    sub1, sub2, sub3, sub_qfq, sub4, sub5, sub6, sub7 = st.tabs([
+        "📊 概览", "📋 股票列表", "🔄 日常同步", "🔧 复权回填", "📥 批量下载", "📦 CSV导入", "📡 TDX导入", "🔍 SQL查询"
     ])
 
     with sub1:
@@ -572,6 +633,9 @@ def render():
 
     with sub3:
         _render_sync()
+
+    with sub_qfq:
+        _render_qfq_backfill()
 
     with sub4:
         _render_download()

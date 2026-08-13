@@ -16,7 +16,7 @@ DB_PATH = DATA_DIR / "stock_system.duckdb"
 # 回测默认参数
 INITIAL_CASH = 1_000_000.0      # 初始资金
 COMMISSION_RATE = 0.0003        # 佣金率 (万三)
-STAMP_TAX = 0.001               # 印花税 (卖出千一)
+STAMP_TAX = 0.0005              # 印花税 (卖出万五, 2023-08-28 起)
 SLIPPAGE = 0.0001               # 滑点
 DEFAULT_BENCHMARK = "000300"    # 默认基准 (沪深300)
 

@@ -138,7 +138,7 @@ def run_portfolio_backtest(
         df = stock_data.get(sym)
         if df is None or df.empty:
             continue
-        result = run_backtest(strategy_cls, df, params)
+        result = run_backtest(strategy_cls, df, params, symbol=str(sym).zfill(6))
         all_results.append(result)
         eq = _equity_from_result(result)
         if eq is not None:

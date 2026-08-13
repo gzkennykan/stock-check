@@ -9,6 +9,15 @@ from analysis.metrics import compute_metrics, compute_benchmark_metrics
 from config import INITIAL_CASH, DEFAULT_BENCHMARK
 
 
+def get_stock_name(symbol: str) -> str:
+    """查股票名称（用于 ST 识别等），失败返回空串"""
+    try:
+        from data.database import get_stock_name_map
+        return get_stock_name_map().get(str(symbol).zfill(6), "")
+    except Exception:
+        return ""
+
+
 @st.cache_data(ttl=3600)
 def load_data(symbol: str, start: str, end: str) -> pd.DataFrame:
     try:
@@ -52,7 +61,8 @@ def run_single_backtest(symbol, strategy_cls, params, start, end,
         st.error(f"未能获取 {symbol} 的行情数据")
         return None
 
-    result = run_backtest(strategy_cls, df, params)
+    result = run_backtest(strategy_cls, df, params,
+                          symbol=str(symbol).zfill(6), name=get_stock_name(symbol))
     if "error" in result:
         st.error(result["error"])
         return None
@@ -185,7 +195,8 @@ def get_trade_list(strat) -> pd.DataFrame:
     return pd.DataFrame(trades)
 
 
-def optuna_objective(trial, strategy_cls, df, param_configs: list[dict], target: str):
+def optuna_objective(trial, strategy_cls, df, param_configs: list[dict], target: str,
+                     symbol: str = "", name: str = ""):
     """Optuna 目标函数。param_configs 每项含 name/type/min/max/step"""
     params = {}
     for pc in param_configs:
@@ -193,6 +204,8 @@ def optuna_objective(trial, strategy_cls, df, param_configs: list[dict], target:
             params[pc["name"]] = trial.suggest_float(pc["name"], pc["min"], pc["max"], step=pc.get("step"))
         else:
             params[pc["name"]] = trial.suggest_int(pc["name"], pc["min"], pc["max"], step=pc.get("step", 1))
+    params.setdefault("symbol", symbol)
+    params.setdefault("name", name)
 
     from backtest.engine import CerebroBuilder
     builder = CerebroBuilder()

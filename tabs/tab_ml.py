@@ -289,3 +289,4 @@ def _render_stratified(strat_df: pd.DataFrame, source_name: str):
 
     st.dataframe(strat_df, width='stretch', hide_index=True)
     st.caption(f"排序因子: {source_name} | 预测周期: 20日")
+    st.caption("⚠️ 分层回测样本仅含当前仍在交易的股票，未纳入已退市股票（幸存者偏差），收益可能系统性高估。")

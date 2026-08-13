@@ -1,7 +1,8 @@
 """
-策略基类：提供止损/止盈/仓位管理等通用能力
+策略基类：提供止损/止盈/仓位管理/涨跌停约束/停牌跳过等通用能力
 """
 import backtrader as bt
+from backtest.limit import limit_pct
 
 
 class BaseStrategy(bt.Strategy):
@@ -10,6 +11,8 @@ class BaseStrategy(bt.Strategy):
         ("take_profit", 0.15),    # 止盈比例 (15%)
         ("trailing_stop", 0.0),   # 跟踪止损比例 (0=禁用)
         ("position_pct", 0.95),   # 仓位使用比例
+        ("symbol", ""),           # 股票代码（涨跌停幅度按板块判断）
+        ("name", ""),             # 股票名称（用于 ST 识别）
     )
 
     def __init__(self):
@@ -90,3 +93,64 @@ class BaseStrategy(bt.Strategy):
         target_value = cash * self.params.position_pct
         size = int(target_value / price)
         return max(size, 0)
+
+    # ── 涨跌停 & 停牌约束 ──
+
+    def _limit_pct(self) -> float:
+        """当前股票单日涨跌停幅度"""
+        return limit_pct(self.params.symbol, self.params.name)
+
+    def _is_limit_up(self) -> bool:
+        """当前 bar 收盘价封涨停（昨收 × (1+幅度)），近似判断不可买入"""
+        if len(self.data) < 2:
+            return False
+        prev_close = self.data.close[-1]
+        if not prev_close or prev_close <= 0:
+            return False
+        return self.data.close[0] >= prev_close * (1 + self._limit_pct()) - 1e-6
+
+    def _is_limit_down(self) -> bool:
+        """当前 bar 收盘价封跌停，近似判断不可卖出"""
+        if len(self.data) < 2:
+            return False
+        prev_close = self.data.close[-1]
+        if not prev_close or prev_close <= 0:
+            return False
+        return self.data.close[0] <= prev_close * (1 - self._limit_pct()) + 1e-6
+
+    def _is_suspended(self) -> bool:
+        """当前 bar 无成交（停牌/一字无量），跳过交易"""
+        vol = getattr(self.data, "volume", None)
+        if vol is None:
+            return False
+        return float(vol[0]) == 0
+
+    def buy(self, *args, **kwargs):
+        """涨停封板 / 停牌时跳过买入"""
+        if self._is_suspended():
+            self.log("停牌无量，跳过买入")
+            return None
+        if self._is_limit_up():
+            self.log("涨停封板，跳过买入")
+            return None
+        return super().buy(*args, **kwargs)
+
+    def sell(self, *args, **kwargs):
+        """跌停封板 / 停牌时跳过卖出"""
+        if self._is_suspended():
+            self.log("停牌无量，跳过卖出")
+            return None
+        if self._is_limit_down():
+            self.log("跌停封板，跳过卖出")
+            return None
+        return super().sell(*args, **kwargs)
+
+    def close(self, *args, **kwargs):
+        """跌停封板 / 停牌时跳过清仓"""
+        if self._is_suspended():
+            self.log("停牌无量，跳过清仓")
+            return None
+        if self._is_limit_down():
+            self.log("跌停封板，跳过清仓")
+            return None
+        return super().close(*args, **kwargs)
