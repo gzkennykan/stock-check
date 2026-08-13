@@ -4,7 +4,7 @@ import pandas as pd
 
 from data.industry import (
     fetch_industry_spot, fetch_industry_list,
-    fetch_industry_stocks,
+    fetch_industry_stocks, analyze_industry_rotation,
 )
 
 import plotly.graph_objects as go
@@ -54,8 +54,8 @@ def render():
     st.caption("行业热度 + 成分股 + 市场宽度 — 全方位感知市场温度")
     st.info("💡 **行业轮动分析**已整合至「📊 高级分析 → 🔄 行业轮动」子页，基于 DuckDB 历史数据提供更全面的多周期动量分析")
 
-    tab_i1, tab_i2, tab_i3, tab_i4 = st.tabs([
-        "🔥 行业热度", "🔬 成分股", "📊 市场宽度", "🗺️ 板块热力图"
+    tab_i1, tab_i2, tab_i3, tab_i4, tab_i5 = st.tabs([
+        "🔥 行业热度", "🔬 成分股", "📊 市场宽度", "🗺️ 板块热力图", "💰 资金轮动"
     ])
 
     # ── Tab 1: 行业热度排名 ──
@@ -490,3 +490,55 @@ def render():
                     st.info("该行业暂无成分股数据")
             except Exception as e:
                 st.error(f"获取失败: {e}")
+
+    # ── Tab 5: 行业资金轮动 ──
+    with tab_i5:
+        st.subheader("💰 行业资金轮动")
+        st.caption("同花顺行业资金流向（净额=流入-流出，单位亿），净流入越大代表主力资金越看好该板块")
+
+        if st.button("🔄 刷新资金数据", key="ind_fund_refresh"):
+            st.cache_data.clear()
+
+        with st.spinner("获取行业资金流向..."):
+            try:
+                rotation = analyze_industry_rotation()
+            except Exception as e:
+                rotation = None
+                st.error(f"获取失败: {e}")
+
+        if rotation is None or rotation.empty:
+            st.info("暂无行业资金流向数据（可能非交易时段或接口异常）")
+        else:
+            top_in = rotation.head(10)
+            top_out = rotation.tail(10).iloc[::-1].reset_index(drop=True)
+
+            c_in, c_out = st.columns(2)
+            with c_in:
+                st.markdown("#### 🟢 净流入 TOP10")
+                fig_in = go.Figure(go.Bar(
+                    x=top_in["净额(亿)"], y=top_in["行业"], orientation="h",
+                    marker_color="#00C853",
+                ))
+                fig_in.update_layout(height=360, margin=dict(l=20, r=20, t=10, b=20),
+                                     yaxis=dict(autorange="reversed"))
+                st.plotly_chart(fig_in, width='stretch')
+            with c_out:
+                st.markdown("#### 🔴 净流出 TOP10")
+                fig_out = go.Figure(go.Bar(
+                    x=top_out["净额(亿)"], y=top_out["行业"], orientation="h",
+                    marker_color="#FF1744",
+                ))
+                fig_out.update_layout(height=360, margin=dict(l=20, r=20, t=10, b=20),
+                                      yaxis=dict(autorange="reversed"))
+                st.plotly_chart(fig_out, width='stretch')
+
+            st.subheader("全部行业资金流向排名")
+            display = rotation.rename(columns={
+                "流入资金(亿)": "流入(亿)", "流出资金(亿)": "流出(亿)",
+                "净额(亿)": "净额(亿)", "领涨股涨幅(%)": "领涨股涨幅(%)",
+            })
+            st.dataframe(round_df(display), width='stretch', hide_index=True,
+                         column_config={
+                             "涨跌幅(%)": st.column_config.NumberColumn(format="%.2f%%"),
+                             "领涨股涨幅(%)": st.column_config.NumberColumn(format="%.2f%%"),
+                         })

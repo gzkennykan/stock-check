@@ -314,8 +314,10 @@ def analyze_industry_rotation() -> pd.DataFrame | None:
     返回 DataFrame，按净额（资金净流入）降序排列。
     """
     try:
-        raw = fetch_industry_fund_flow()
-        if raw.empty:
+        import akshare as ak
+        # 直接取同花顺即时资金流向原始数据（避免 industry_spot 表列结构不一致导致位置解析错位）
+        raw = ak.stock_fund_flow_industry(symbol="即时")
+        if raw is None or raw.empty:
             return None
 
         result = pd.DataFrame()
