@@ -4,6 +4,7 @@ import pandas as pd
 from datetime import datetime
 from data.screener import get_combined_data, smart_screen, get_industry_list
 from data.factors import compute_upside_score
+from data.signal_tracker import record_signals
 from utils import fmt_yuan, format_stock_display, style_pct_col
 
 
@@ -212,6 +213,10 @@ def _render_upside_mode(combined: pd.DataFrame):
 
     st.caption("💡 评分：资金流入(27%) + 净流入占比(17%) + 涨幅合理性(16%) + 技术面(15%) + 换手(10%) + 盈利(10%) + 估值(5%)")
 
+    if st.button("📝 记录 TOP 信号（用于后验证）", key="sc_record_signal_up", width='stretch'):
+        n = record_signals(v_top, source="screener", top_n=30, score_col="upside_score")
+        st.success(f"已记录 {n} 条信号，可在「信号验证」页查看 T+N 后表现")
+
 
 def _render_result_table(result: pd.DataFrame):
     """渲染筛选结果表格"""
@@ -266,13 +271,62 @@ def _render_result_table(result: pd.DataFrame):
     st.download_button("📥 导出 CSV", data=csv_data,
         file_name=f"screener_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv", mime="text/csv")
 
+    if st.button("📝 记录信号（用于后验证）", key="sc_record_signal", width='stretch'):
+        n = record_signals(result, source="screener", top_n=30)
+        st.success(f"已记录 {n} 条信号，可在「信号验证」页查看 T+N 后表现")
+
+
+def _render_factor_mode():
+    """多因子综合评分排名（动量/波动率/量能/趋势/回撤）"""
+    from data.factors import compute_composite_ranking
+    from data.database import get_stock_name_map
+
+    st.subheader("📊 多因子综合排名")
+    st.caption("动量(30%) + 波动率(15%) + 成交量(20%) + 趋势(20%) + 回撤(15%)，基于全市场历史 K 线综合评分")
+
+    topn = st.selectbox("显示数量", [30, 50, 100, 200], index=1, key="fm_topn")
+
+    with st.spinner("计算全市场多因子排名（约几秒）..."):
+        ranking = compute_composite_ranking()
+
+    if ranking.empty:
+        st.warning("计算失败或数据不足")
+        return
+
+    names = get_stock_name_map()
+    show = ranking.head(int(topn)).copy()
+    show["名称"] = show["symbol"].map(names).fillna("")
+    show = show.rename(columns={
+        "symbol": "代码", "rank": "排名", "composite": "综合分",
+        "mom_score": "动量分", "mom_20d": "20日动量%",
+        "vol_score": "波动率分", "trend_score": "趋势分",
+        "dd_score": "回撤分", "max_dd_60d": "60日回撤%",
+    })
+    cols = [c for c in ["代码", "名称", "排名", "综合分", "动量分", "20日动量%",
+                        "波动率分", "趋势分", "回撤分", "60日回撤%"] if c in show.columns]
+    st.dataframe(round_df(show[cols]), width='stretch', hide_index=True,
+                 column_config={
+                     "综合分": st.column_config.ProgressColumn(format="%.0f", min_value=0, max_value=100),
+                     "代码": st.column_config.TextColumn(width="small"),
+                     "名称": st.column_config.TextColumn(width="small"),
+                 })
+
+    if st.button("📝 记录 TOP 信号（用于后验证）", key="fm_record_signal", width='stretch'):
+        rec = ranking.head(30).rename(columns={"symbol": "code", "composite": "score"})
+        n = record_signals(rec, source="factor", top_n=30, score_col="score")
+        st.success(f"已记录 {n} 条信号，可在「信号验证」页查看 T+N 后表现")
+
 
 def render():
     st.title("🧠 智能选股")
     st.caption("多维度筛选 + 值博率排名 — 统一选股工具")
 
     # 模式切换
-    mode = st.radio("模式", ["🔍 多维度筛选", "🔥 值博率排名"], horizontal=True, key="sc_mode")
+    mode = st.radio("模式", ["🔍 多维度筛选", "🔥 值博率排名", "📊 多因子综合"], horizontal=True, key="sc_mode")
+
+    if "多因子" in mode:
+        _render_factor_mode()
+        return
 
     # 数据加载
     if "sc_combined" not in st.session_state:

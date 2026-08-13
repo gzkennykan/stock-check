@@ -41,7 +41,8 @@ def render():
             end_s = end_date.strftime("%Y-%m-%d")
             with st.spinner(f"获取 {symbol} 行情数据并运行回测..."):
                 bm_code = st.session_state.get("benchmark", "000300")
-                data = run_single_backtest(symbol, strategy_cls, params, start_s, end_s, bm_code)
+                data = run_single_backtest(symbol, strategy_cls, params, start_s, end_s, bm_code,
+                                           market_timing=st.session_state.get("market_timing", False))
 
             if data:
                 st.session_state["backtest_data"] = data

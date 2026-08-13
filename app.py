@@ -135,6 +135,7 @@ from tabs.tab2_compare import render as render_tab2
 from tabs.tab3_optimize import render as render_tab3
 from tabs.tab_performance import render as render_perf
 from tabs.tab_ml import render as render_ml
+from tabs.tab_signal_validation import render as render_sv
 from tabs.tab5_market_rank import render as render_tab4
 from tabs.tab_screener import render as render_sc
 from tabs.tab9_lhb import render as render_lhb
@@ -165,6 +166,7 @@ PAGES = {
         st.Page(render_perf, title="绩效分析", icon="📈", url_path="performance"),
         st.Page(render_tab8, title="组合回测", icon="🧺", url_path="portfolio"),
         st.Page(render_ml, title="ML因子研究", icon="🧠", url_path="ml"),
+        st.Page(render_sv, title="信号验证", icon="📡", url_path="signal-validation"),
         st.Page(render_tab13, title="高级分析", icon="🔬", url_path="advanced"),
     ],
     "🗄️ 数据": [
@@ -252,6 +254,9 @@ if st.session_state.work_mode == "回测":
     params["stop_loss"] = st.sidebar.number_input("止损比例 (%)", 0, 20, 5, step=1) / 100
     params["take_profit"] = st.sidebar.number_input("止盈比例 (%)", 0, 50, 15, step=1) / 100
     params["position_pct"] = st.sidebar.number_input("仓位比例 (%)", 10, 100, 95, step=1) / 100
+    st.session_state["market_timing"] = st.sidebar.toggle(
+        "启用大盘择时（牛熊自动调仓）", value=st.session_state.get("market_timing", False),
+        help="基于沪深300均线趋势，牛市满仓/震荡60%/熊市40%，高波动再减仓")
     st.session_state["params"] = params
 
     st.sidebar.subheader("回测日期")

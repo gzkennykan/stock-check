@@ -219,6 +219,23 @@ def _ensure_tables(conn) -> None:
         )
     """)
 
+    # ── 选股信号记录（后验证闭环）──
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS signal_records (
+            signal_date  DATE         NOT NULL,
+            symbol       VARCHAR(10)  NOT NULL,
+            name         VARCHAR(50),
+            source       VARCHAR(20)  NOT NULL,
+            signal_price DOUBLE,
+            score        DOUBLE,
+            created_at   TIMESTAMP    DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (signal_date, symbol, source)
+        )
+    """)
+    conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_signal_date ON signal_records(signal_date)
+    """)
+
     # ── 行业板块实时行情 ──
     conn.execute("""
         CREATE TABLE IF NOT EXISTS industry_spot (
@@ -673,6 +690,60 @@ def backfill_qfq(symbols: list[str] | None = None, resume: bool = True,
 
     return {"done": done, "no_adjust": no_adjust, "skipped": skipped,
             "errors": errors, "total": total}
+
+
+# ════════════════ 选股信号记录（后验证闭环） ════════════════
+
+def insert_signal_records(records: list[dict]) -> int:
+    """批量插入信号记录。records 每项含 signal_date/symbol/name/source/signal_price/score。"""
+    if not records:
+        return 0
+    conn = get_connection()
+    try:
+        _ensure_tables(conn)
+        n = 0
+        for r in records:
+            conn.execute("""
+                INSERT OR REPLACE INTO signal_records
+                    (signal_date, symbol, name, source, signal_price, score)
+                VALUES (?, ?, ?, ?, ?, ?)
+            """, [r.get("signal_date"), r.get("symbol"), r.get("name"),
+                  r.get("source"), r.get("signal_price"), r.get("score")])
+            n += 1
+        return n
+    finally:
+        conn.close()
+
+
+def get_signal_records(source: str = None, start: str = None, end: str = None) -> pd.DataFrame:
+    """读取信号记录（按日期倒序）。"""
+    conn = get_connection(read_only=True)
+    try:
+        if not _table_exists(conn, "signal_records"):
+            return pd.DataFrame()
+        where = []
+        params = []
+        if source:
+            where.append("source = ?")
+            params.append(source)
+        if start:
+            where.append("signal_date >= ?")
+            params.append(start)
+        if end:
+            where.append("signal_date <= ?")
+            params.append(end)
+        q = ("SELECT signal_date, symbol, name, source, signal_price, score "
+             "FROM signal_records")
+        if where:
+            q += " WHERE " + " AND ".join(where)
+        q += " ORDER BY signal_date DESC, symbol"
+        df = conn.execute(q, params).df()
+        if df is None or df.empty:
+            return pd.DataFrame()
+        df["signal_date"] = pd.to_datetime(df["signal_date"])
+        return df
+    finally:
+        conn.close()
 
 
 # ────────────────────────── 资金流向快照 ──────────────────────────

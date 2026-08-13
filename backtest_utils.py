@@ -54,14 +54,23 @@ def get_daily_returns(strat) -> list[float]:
 
 
 def run_single_backtest(symbol, strategy_cls, params, start, end,
-                        benchmark_code: str = DEFAULT_BENCHMARK):
+                        benchmark_code: str = DEFAULT_BENCHMARK, market_timing: bool = False):
     """运行回测并返回 metrics + charts 数据（含基准对比）"""
     df = load_data(symbol, start, end)
     if df.empty:
         st.error(f"未能获取 {symbol} 的行情数据")
         return None
 
-    result = run_backtest(strategy_cls, df, params,
+    # 大盘择时：设置仓位序列（None=关闭）
+    from data.market_regime import compute_regime_series, set_regime_series
+    if market_timing:
+        set_regime_series(compute_regime_series(end_date=end))
+    else:
+        set_regime_series(None)
+
+    kwargs = dict(params or {})
+    kwargs["market_timing"] = market_timing
+    result = run_backtest(strategy_cls, df, kwargs,
                           symbol=str(symbol).zfill(6), name=get_stock_name(symbol))
     if "error" in result:
         st.error(result["error"])

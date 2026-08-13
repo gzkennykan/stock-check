@@ -1159,6 +1159,21 @@ def render():
     st.title("📊 高级分析")
     st.caption("DuckDB 驱动 — 综合诊断 · 多因子 · 形态 · 异动 · 行业轮动 · 蜡烛 · 相关性 · 批量回测 · 量化信号 · 资金流向")
 
+    # ── 大盘择时 ──
+    with st.expander("🌡️ 大盘择时（牛熊仓位参考）", expanded=True):
+        from data.market_regime import detect_regime
+        reg = detect_regime()
+        if reg:
+            emoji = {"牛市": "🐂", "熊市": "🐻", "震荡": "⚖️"}.get(reg["regime"], "")
+            rc1, rc2, rc3, rc4, rc5 = st.columns(5)
+            rc1.metric("大盘状态", f"{emoji} {reg['regime']}")
+            rc2.metric("建议仓位", f"{reg['position_pct']:.0f}%")
+            rc3.metric("沪深300", f"{reg['close']}")
+            rc4.metric("MA20 / MA60", f"{reg['ma20']} / {reg['ma60']}")
+            rc5.metric("20日波动率", f"{reg['volatility']}%")
+        else:
+            st.caption("暂无基准指数(000300)数据，无法判断大盘状态")
+
     sub1, sub2, sub3, sub4, sub5, sub6, sub7 = st.tabs([
         "🔬 个股诊断",
         "🎯 多因子排名",

@@ -13,6 +13,7 @@ class BaseStrategy(bt.Strategy):
         ("position_pct", 0.95),   # 仓位使用比例
         ("symbol", ""),           # 股票代码（涨跌停幅度按板块判断）
         ("name", ""),             # 股票名称（用于 ST 识别）
+        ("market_timing", False),  # 是否启用大盘择时（按基准牛熊动态调仓）
     )
 
     def __init__(self):
@@ -91,6 +92,11 @@ class BaseStrategy(bt.Strategy):
         cash = self.broker.get_cash()
         price = self.data.close[0]
         target_value = cash * self.params.position_pct
+        if self.params.market_timing:
+            from data.market_regime import get_position_for
+            regime_pos = get_position_for(self.data.datetime.date(0))
+            if regime_pos is not None:
+                target_value = cash * self.params.position_pct * regime_pos
         size = int(target_value / price)
         return max(size, 0)
 

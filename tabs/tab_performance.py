@@ -63,6 +63,21 @@ def render():
     daily_returns = equity.pct_change().dropna()
     metrics = compute_metrics(equity, daily_returns, trades_data or [])
 
+    # 最长连赢/连亏（按日收益）
+    def _max_streak(rets):
+        pos = neg = max_pos = max_neg = 0
+        for r in rets:
+            if r > 0:
+                pos += 1; neg = 0
+            elif r < 0:
+                neg += 1; pos = 0
+            else:
+                pos = neg = 0
+            max_pos = max(max_pos, pos)
+            max_neg = max(max_neg, neg)
+        return max_pos, max_neg
+    max_win_streak, max_loss_streak = _max_streak(daily_returns)
+
     st.divider()
 
     # ══════════════════════════════════════════
@@ -112,6 +127,18 @@ def render():
         st.metric("最佳交易", f"{metrics.get('best_trade', 0):.0f}")
     with r3c5:
         st.metric("最差交易", f"{metrics.get('worst_trade', 0):.0f}")
+
+    r4c1, r4c2, r4c3, r4c4, r4c5 = st.columns(5)
+    with r4c1:
+        st.metric("最长连赢", f"{max_win_streak} 天")
+    with r4c2:
+        st.metric("最长连亏", f"{max_loss_streak} 天")
+    with r4c3:
+        st.metric("正收益月数", f"{metrics.get('n_months_positive', 0)}")
+    with r4c4:
+        st.metric("回测年数", f"{metrics.get('n_years', 0)}")
+    with r4c5:
+        st.metric("回测天数", f"{metrics.get('n_days', 0)}")
 
     st.divider()
 
@@ -204,10 +231,23 @@ def render():
             st.plotly_chart(fig_heat, width='stretch')
 
         # 年度汇总
-        if "年度收益%" in monthly.columns:
-            st.dataframe(round_df(monthly), width='stretch')
-        else:
-            st.dataframe(round_df(monthly), width='stretch')
+        st.dataframe(round_df(monthly), width='stretch')
+
+    # 年度收益柱状图
+    yearly = equity.groupby(equity.index.year).agg(["first", "last"])
+    if len(yearly) >= 1:
+        st.subheader("📅 年度收益")
+        yearly_ret = (yearly["last"] / yearly["first"] - 1) * 100
+        fig_year = go.Figure(go.Bar(
+            x=[str(y) for y in yearly_ret.index],
+            y=yearly_ret.values,
+            marker_color=["#00C853" if v >= 0 else "#FF1744" for v in yearly_ret.values],
+            text=[f"{v:+.1f}%" for v in yearly_ret.values],
+            textposition="outside",
+        ))
+        fig_year.add_hline(y=0, line_dash="dash", line_color="#888")
+        fig_year.update_layout(height=300, margin=dict(l=20, r=20, t=20, b=30))
+        st.plotly_chart(fig_year, width='stretch')
 
     # ══════════════════════════════════════════
     # 4. 滚动指标（稳定性分析）
