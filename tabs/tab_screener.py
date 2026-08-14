@@ -5,7 +5,7 @@ from datetime import datetime
 from data.screener import get_combined_data, smart_screen, get_industry_list
 from data.factors import compute_upside_score
 from data.signal_tracker import record_signals
-from utils import fmt_yuan, format_stock_display, style_pct_col
+from utils import fmt_yuan, format_stock_display, style_pct_col, round_df
 
 
 def _render_filter_mode(combined: pd.DataFrame):

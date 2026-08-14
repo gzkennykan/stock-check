@@ -282,15 +282,29 @@ def compute_factor_ic(
         ic_rows.append(row)
 
     ic_df = pd.DataFrame(ic_rows)
-    if not ic_df.empty:
-        ic_1d = ic_df.get("IC_1d", pd.Series([0]*len(ic_df)))
-        ic_std = ic_1d.std()
+    if ic_df.empty:
+        return ic_df
+
+    # 用第一个前向周期的 IC 列作为主排序列（用户可能不选 1 日，避免硬编码 IC_1d 导致 KeyError）
+    sort_col = f"IC_{forward_periods[0]}d" if forward_periods else None
+    if sort_col is None or sort_col not in ic_df.columns:
+        ic_cols = [c for c in ic_df.columns if c.startswith("IC_") and c.endswith("d")]
+        sort_col = ic_cols[0] if ic_cols else None
+
+    if sort_col is not None:
+        ic_vals = pd.to_numeric(ic_df[sort_col], errors="coerce")
+        ic_std = ic_vals.std()
         if ic_std and ic_std > 0:
-            ic_df["IC_IR"] = round(ic_1d.mean() / ic_std, 2)
+            ic_df["IC_IR"] = round(ic_vals.mean() / ic_std, 2)
         else:
             ic_df["IC_IR"] = 0
+        # 按 IC 绝对值降序：用清洗后的数值序列排序，避免 key=abs 作用于含 None 的 object 列报错
+        ic_df = ic_df.assign(_abs_sort=ic_vals.abs())
+        ic_df = ic_df.sort_values("_abs_sort", ascending=False).drop(columns="_abs_sort")
+        return ic_df
 
-    return ic_df.sort_values("IC_1d", key=abs, ascending=False)
+    ic_df["IC_IR"] = 0
+    return ic_df
 
 
 # ══════════════════════════════════════════════════════════

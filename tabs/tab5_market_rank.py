@@ -61,7 +61,6 @@ def render():
         return
 
     # 资金流特殊列
-    extra_cols = {}
     if view in ("inflow", "outflow"):
         label = "资金净流入" if view == "inflow" else "资金净流出"
         display[label] = display["main_capital"].apply(lambda x: fmt_yuan(x, signed=True))
@@ -70,18 +69,29 @@ def render():
         if "capital_outflow" in display.columns:
             display["流出资金"] = display["capital_outflow"].apply(fmt_yuan)
         if "turnover" in display.columns:
+            display["成交额显示"] = display["turnover"].apply(fmt_yuan)
             display["净额占比"] = display.apply(
                 lambda r: f"{r['main_capital']/r['turnover']*100:+.1f}%"
                 if r.get("turnover", 0) > 0 else "N/A", axis=1
             )
         display = format_stock_display(display,
             drop_after=["main_capital", "capital_inflow", "capital_outflow",
-                        "turnover_rate", "hot_money", "retail_money", "net_flow_pct"])
+                        "hot_money", "retail_money", "net_flow_pct"])
     else:
         display["成交额显示"] = display["turnover"].apply(fmt_yuan)
         display = format_stock_display(display)
 
+    # 去掉原始「成交额(元)」列（避免大数字显示成科学计数法），统一用「成交额」亿格式
+    display = display.drop(columns=["成交额(元)"], errors="ignore")
+    display = display.rename(columns={"成交额显示": "成交额"})
+
+    col_cfg = {"涨跌幅(%)": st.column_config.NumberColumn(format="%.2f%%")}
+    if "最新价" in display.columns:
+        col_cfg["最新价"] = st.column_config.NumberColumn(format="%.2f")
+    if "换手率(%)" in display.columns:
+        col_cfg["换手率(%)"] = st.column_config.NumberColumn(format="%.2f%%")
+
     st.dataframe(
         style_pct_col(display.style, "涨跌幅(%)"), width='stretch', hide_index=True,
-        column_config={"涨跌幅(%)": st.column_config.NumberColumn(format="%.2f%%")},
+        column_config=col_cfg,
     )

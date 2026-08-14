@@ -85,6 +85,11 @@ def render():
 
                 # IC 柱状图
                 ic_col = f"IC_{forward_days[0]}d" if forward_days else "IC_5d"
+                if ic_col in ic_df.columns and ic_df[ic_col].isna().all():
+                    st.warning(
+                        "当前日期之后没有足够的未来行情数据，IC 全为空。"
+                        "请把「分析日期」改到更早的交易日（需留出未来 1/5/20 日的行情）。"
+                    )
                 if ic_col in ic_df.columns:
                     fig = go.Figure()
                     colors = ["#00C853" if v > 0 else "#FF1744"
