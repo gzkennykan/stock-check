@@ -1,5 +1,5 @@
 """
-WinnerK股票量化系统 — Streamlit 可视化界面
+WinnerK股票查询系统 — Streamlit 可视化界面
 运行: streamlit run app.py
 """
 import sys
@@ -14,7 +14,7 @@ from strategies import MACrossStrategy, MACDStrategy, RSIStrategy
 from strategies import BollingerStrategy, TripleMAStrategy, KDJStrategy
 from strategies import DonchianStrategy, ATRStrategy
 
-st.set_page_config(page_title="WinnerK股票量化系统", page_icon="📈", layout="wide")
+st.set_page_config(page_title="WinnerK股票查询系统", page_icon="📈", layout="wide")
 
 
 def _startup_tdx_sync():
@@ -178,7 +178,7 @@ pg = st.navigation(PAGES, position="sidebar")
 
 # =========================== 侧边栏 ===========================
 
-st.sidebar.title("📈 WinnerK股票量化系统")
+st.sidebar.title("📈 WinnerK股票查询系统")
 
 # ── 工作模式切换 ──
 if "work_mode" not in st.session_state:

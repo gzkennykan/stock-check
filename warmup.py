@@ -25,7 +25,7 @@ def warm_cache(label: str, fn, **kwargs):
 
 def main():
     print("=" * 50)
-    print("  WinnerK股票量化系统 — 缓存预热")
+    print("  WinnerK股票查询系统 — 缓存预热")
     print("=" * 50)
 
     # 行情数据（全 A 股 ~5200 只）

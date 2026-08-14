@@ -142,7 +142,7 @@ def _build_daily_report(
         lines.append("")
 
     lines.append("---")
-    lines.append(f"> 🤖 由 WinnerK 股票量化系统自动生成 | {today_str}")
+    lines.append(f"> 🤖 由 WinnerK 股票查询系统自动生成 | {today_str}")
 
     return "\n".join(lines)
 
