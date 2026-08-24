@@ -14,6 +14,7 @@ from data.technicals import compute_full_analysis
 from data.fund_flow import get_fund_flow_summary
 from utils import round_df
 from data.fundamental import fetch_financial_indicators
+from ui.components import badge
 
 
 def _resolve_input(raw: str, name_map: dict) -> str | None:
@@ -203,6 +204,24 @@ def render():
                 else:
                     _render_sentiment_result(code, name, result)
 
+                    # ── LLM 深度解读（情绪增强）──
+                    st.divider()
+                    st.markdown("#### 🤖 LLM 深度解读")
+                    st.caption("把近期新闻/公告标题批量交给 LLM 做情绪研判，提取催化剂与风险（需配置 LLM API Key，未配置则保留规则打分）")
+                    if st.button("🔮 运行 LLM 深度解读", key=f"sent_llm_{code}"):
+                        from data.sentiment import fetch_stock_news
+                        from data.llm_analysis import llm_sentiment_analysis
+                        with st.spinner("LLM 分析新闻标题中..."):
+                            news = fetch_stock_news(code)
+                            titles = []
+                            if not news.empty and "title" in news.columns:
+                                titles = news["title"].astype(str).tolist()
+                            llm_res = llm_sentiment_analysis(titles, symbol=code, name=name)
+                        if llm_res is None:
+                            st.info("⚠️ LLM 未配置 API Key 或调用失败，当前展示为关键词规则打分结果")
+                        else:
+                            _render_llm_sentiment(code, name, llm_res)
+
     # ══════════════════════════════════════════
     # Tab 3: 批量分析
     # ══════════════════════════════════════════
@@ -286,23 +305,18 @@ def _render_single_result(result: dict):
     # ── 头部：评分 + 评级 ──
     score = result.get("score", 0) or 0
     rating = result.get("rating", "未知")
-    rating_color = {
-        "强烈关注": "#00C853", "可关注": "#FFD600",
-        "观察": "#FF9100", "暂不建议": "#FF1744",
-    }
 
     hc1, hc2, hc3 = st.columns([2, 1, 3])
     with hc1:
         st.markdown(f"## {result['name']} ({result['symbol']})")
     with hc2:
-        color = rating_color.get(rating, "#888")
-        st.markdown(
-            f"<div style='text-align:center;font-size:48px;font-weight:bold;color:{color}'>{score:.1f}</div>"
-            f"<div style='text-align:center'>/ 10</div>",
-            unsafe_allow_html=True,
-        )
+        st.metric("综合评分", f"{score:.1f}", delta=f"/10", delta_color="off")
+        grade = ("bull" if rating == "强烈关注"
+                 else "info" if rating == "可关注"
+                 else "warn" if rating == "观察"
+                 else "bear")
+        badge(grade, rating)
     with hc3:
-        st.markdown(f"### {rating}")
         st.markdown(f"> {result.get('summary', '')}")
 
     # ── 详细分析 ──
@@ -489,3 +503,47 @@ def _render_sentiment_result(code: str, name: str, result: dict):
         st.caption("🔴 最负面新闻")
         for t in result.get("top_negative", []):
             st.write(f"- {t[:80]}")
+
+
+def _render_llm_sentiment(code: str, name: str, res: dict):
+    """渲染 LLM 情绪解读结果"""
+    overall = res.get("overall_score")
+    label = res.get("overall_label", "中性")
+
+    llm_c1, llm_c2, llm_c3 = st.columns([1, 2, 2])
+    with llm_c1:
+        score_str = f"{float(overall):+.2f}" if overall is not None else "N/A"
+        delta = "看多" if (overall or 0) > 0.1 else ("看空" if (overall or 0) < -0.1 else "中性")
+        st.metric("LLM 情绪分", score_str, delta=delta,
+                  help="-1~1，>0.1 偏多，<-0.1 偏空")
+    with llm_c2:
+        st.caption("**整体研判**")
+        emoji = {"正面": "🟢", "负面": "🔴"}.get(str(label), "🟡")
+        st.markdown(f"{emoji} **{label}**")
+        cat = res.get("catalysts")
+        if cat and str(cat).strip() not in ("无", "none", "None", ""):
+            st.markdown(f"⚡ **催化**: {cat}")
+    with llm_c3:
+        risk = res.get("risks")
+        if risk and str(risk).strip() not in ("无", "none", "None", ""):
+            st.markdown(f"⚠️ **风险**: {risk}")
+        else:
+            st.caption("⚠️ 无明显风险提示")
+
+    # 逐条关键事件
+    events = res.get("key_events", [])
+    if isinstance(events, list) and events:
+        st.caption("**LLM 逐条解读**")
+        rows = []
+        for ev in events[:15]:
+            if not isinstance(ev, dict):
+                continue
+            rows.append({
+                "事件": str(ev.get("title", ""))[:60],
+                "情绪分": round(float(ev.get("score", 0)), 2),
+                "理由": str(ev.get("reason", ""))[:40],
+            })
+        if rows:
+            st.dataframe(round_df(pd.DataFrame(rows)), width='stretch', hide_index=True)
+
+    st.caption("⚠️ LLM 输出仅供研究参考，不构成投资建议；可能与规则打分存在分歧，以多方信息综合判断为准")

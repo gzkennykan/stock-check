@@ -272,6 +272,57 @@ def _parse_llm_response(text: str) -> dict:
     }
 
 
+def llm_text_analyze(system_prompt: str, user_prompt: str, retries: int = 2) -> Optional[str]:
+    """
+    公开的 LLM 文本分析入口：带重试。
+
+    与 _call_llm 的区别：_call_llm 出错时返回 "[LLM错误]..." 字符串而非抛异常，
+    普通按异常重试的装饰器不生效，这里按返回值判断重试。
+    无 API Key 或最终失败返回 None。
+    """
+    text = None
+    for _ in range(retries + 1):
+        text = _call_llm(system_prompt, user_prompt)
+        if text and not text.startswith("[LLM错误]"):
+            return text
+    return text
+
+
+def llm_sentiment_analysis(titles: list[str], symbol: str = "", name: str = "") -> Optional[dict]:
+    """
+    对一组新闻/公告标题做 LLM 情绪分析（批量一次调用）。
+
+    返回:
+        {overall_score, overall_label, key_events:[{title,score,reason}], catalysts, risks}
+    无 API Key / 调用失败返回 None（调用方应降级为关键词规则打分）。
+    """
+    if not titles:
+        return None
+    if not get_llm_config()["api_key"]:
+        return None
+
+    system_prompt = (
+        "你是资深A股财经分析师。对给定的股票新闻/公告标题列表逐条判断情绪，"
+        "并给出整体研判。只输出严格JSON，不要任何多余文字。\n"
+        'JSON格式: {"overall_score": -1到1之间的小数, "overall_label": "正面|中性|负面", '
+        '"key_events": [{"title": "原标题", "score": -1到1, "reason": "一句话理由"}], '
+        '"catalysts": "可能的利好催化，无则写无", "risks": "潜在风险，无则写无"}'
+    )
+    lines = "\n".join(f"{i + 1}. {str(t)[:120]}" for i, t in enumerate(titles[:30]))
+    user_prompt = (
+        f"股票: {name or ''} ({symbol or ''})\n新闻/公告标题列表:\n{lines}\n"
+        "请逐条打分并给出整体研判。"
+    )
+
+    text = llm_text_analyze(system_prompt, user_prompt)
+    if not text or text.startswith("[LLM错误]"):
+        return None
+    result = _parse_llm_response(text)
+    if "error" in result:
+        return None
+    return result
+
+
 def analyze_stock(
     symbol: str,
     name: str = "",

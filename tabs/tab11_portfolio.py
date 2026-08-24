@@ -77,7 +77,7 @@ def _plot_portfolio_curves(
         showlegend=True,
         hovermode="x unified",
         margin=dict(l=20, r=20, t=40, b=20),
-        template="plotly_white",
+        template="winnerk",
         legend=dict(yanchor="top", y=0.99, xanchor="left", x=0.01, font=dict(size=10)),
     )
     fig.update_xaxes(rangeslider_visible=False)
@@ -100,7 +100,7 @@ def _plot_correlation_heatmap(corr_matrix: pd.DataFrame) -> go.Figure:
     ))
     fig.update_layout(
         height=350,
-        template="plotly_white",
+        template="winnerk",
         margin=dict(l=20, r=20, t=20, b=20),
         xaxis=dict(tickangle=45),
     )
@@ -297,6 +297,6 @@ def render():
         marker=dict(colors=["#1E88E5", "#FF9800", "#4CAF50", "#E53935",
                             "#9C27B0", "#00BCD4", "#FF5722", "#795548"]),
     )])
-    pie_fig.update_layout(height=350, template="plotly_white",
+    pie_fig.update_layout(height=350, template="winnerk",
                           margin=dict(l=20, r=20, t=20, b=20))
     st.plotly_chart(pie_fig, width='stretch')

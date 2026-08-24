@@ -6,12 +6,15 @@ from datetime import datetime
 from data.zt_pool import get_zt_pool, get_zt_summary
 from data.screener import get_fund_flow_data, get_stock_list
 from data.anomaly import run_all_anomalies
-from data.candlestick import scan_all_candlestick_patterns, scan_pandas_ta_patterns
+from data.candlestick import (
+    scan_all_candlestick_patterns, scan_extended_patterns, scan_pandas_ta_patterns,
+)
 from data.patterns import run_all_patterns
 from data.factors import compute_composite_ranking
 from data.industry_db import compute_industry_momentum, get_industry_list_from_db
 from data.database import get_stock_name_map
 from utils import fmt_yuan, parse_cn_money, round_df
+from ui.components import badge, diagnosis_section, conclusion_card, stepper
 
 
 _VALID_STOCK_CODES: set = None  # lazy cache
@@ -176,19 +179,41 @@ def _run_step3():
 
 
 def _run_step4():
-    """Step 4: K线形态"""
-    patterns = scan_all_candlestick_patterns()
+    """Step 4: K线形态（原生8 + 自研16 + TA-Lib 30+，共约 50 种，按 signal 列判断看涨）"""
+    patterns = {}
+    try:
+        patterns.update(scan_all_candlestick_patterns())   # 8 种原生（SQL）
+    except Exception:
+        pass
+    try:
+        patterns.update(scan_extended_patterns())          # 16 种自研扩展
+    except Exception:
+        pass
+    # TA-Lib 扩展（未装 pandas_ta/TA-Lib 时返回空或 {"_error": ...}，自动降级）
+    ta = scan_pandas_ta_patterns()
+    if isinstance(ta, dict) and "_error" not in ta:
+        patterns.update(ta)
     st.session_state.wf_patterns = patterns
-    bullish = [k for k, v in patterns.items()
-               if isinstance(v, pd.DataFrame) and not v.empty
-               and any(b in k for b in ["Bullish", "Hammer", "Morning", "Soldiers"])]
+    bullish_count = 0
     # 看涨形态的股票代码加入候选池
     for name, df in patterns.items():
-        if isinstance(df, pd.DataFrame) and not df.empty:
-            if any(b in name for b in ["Bullish", "Hammer", "Morning", "Soldiers"]):
-                for c in df.get("symbol", pd.Series()).head(20).values:
-                    st.session_state.wf_candidates.add(str(c).zfill(6))
-    return f"发现 {len(bullish)} 种看涨形态"
+        if not isinstance(df, pd.DataFrame) or df.empty:
+            continue
+        if "signal" in df.columns:
+            pos = df[df["signal"] > 0]
+            if pos.empty:
+                continue
+            bullish_count += 1
+            for c in pos["symbol"].head(20).values:
+                st.session_state.wf_candidates.add(str(c).zfill(6))
+        else:
+            # 无 signal 列的旧格式：按形态名兜底
+            if not any(b in name for b in ["Bullish", "Hammer", "Morning", "Soldiers"]):
+                continue
+            bullish_count += 1
+            for c in df.get("symbol", pd.Series()).head(20).values:
+                st.session_state.wf_candidates.add(str(c).zfill(6))
+    return f"发现 {bullish_count} 种看涨形态"
 
 
 def _run_step5():
@@ -314,6 +339,16 @@ def render():
                 f"{v}" for v in list(st.session_state.wf_auto_status.values())[-3:]
             ))
 
+    # ── 闭环进度条（一键选股后汇总 7 步状态） ──
+    if st.session_state.wf_auto_status:
+        _steps_meta = []
+        for _name, _ in _STEPS:
+            _s = st.session_state.wf_auto_status.get(_name, "")
+            _ok = None if not _s else ("✅" in _s)
+            _note = _s.replace("✅", "").replace("❌ 失败:", "").strip()
+            _steps_meta.append({"label": _name, "ok": _ok, "note": _note})
+        stepper(_steps_meta)
+
     st.divider()
 
     # ══════════════════════════════════════════
@@ -438,19 +473,35 @@ def render():
 
         patterns = st.session_state.get("wf_patterns", {})
         if patterns:
+            def _is_bullish(name, df):
+                if "signal" in df.columns:
+                    return (df["signal"] > 0).any()
+                return any(b in name for b in ["Bullish", "Hammer", "Morning", "Soldiers"])
+
             bullish_patterns = {k: v for k, v in patterns.items()
+                if isinstance(v, pd.DataFrame) and not v.empty and _is_bullish(k, v)}
+            bearish_patterns = {k: v for k, v in patterns.items()
                 if isinstance(v, pd.DataFrame) and not v.empty
-                and any(b in k for b in ["Bullish", "Hammer", "Morning", "Soldiers"])}
+                and k not in bullish_patterns and not _is_bullish(k, v)}
+            names = get_stock_name_map()
             if bullish_patterns:
+                st.caption(f"🟢 看涨形态 {len(bullish_patterns)} 种")
                 for name, df in bullish_patterns.items():
                     with st.expander(f"🟢 {name} ({len(df)} 只)", expanded=False):
-                        names = get_stock_name_map()
                         show = df.head(10).copy()
                         if "symbol" in show.columns:
                             show["名称"] = show["symbol"].map(names).fillna("")
                         st.dataframe(round_df(show), width='stretch', hide_index=True)
             else:
                 st.info("未发现看涨形态")
+            if bearish_patterns:
+                st.caption(f"🔴 看跌形态 {len(bearish_patterns)} 种")
+                for name, df in bearish_patterns.items():
+                    with st.expander(f"🔴 {name} ({len(df)} 只)", expanded=False):
+                        show = df.head(10).copy()
+                        if "symbol" in show.columns:
+                            show["名称"] = show["symbol"].map(names).fillna("")
+                        st.dataframe(round_df(show), width='stretch', hide_index=True)
         else:
             st.info("👆 点击扫描K线形态")
 
@@ -555,13 +606,14 @@ def render():
         cand_list = sorted(candidates)
         name_map = get_stock_name_map()
 
-        # 代码 + 中文名称 网格展示
-        cols = st.columns(8)
-        for i, c in enumerate(cand_list[:40]):
-            cname = name_map.get(c, "")
-            display_text = f"{c}\n{cname}" if cname else c
-            with cols[i % 8]:
-                st.code(display_text)
+        # 候选池表格（代码/名称/是否已诊断），替代 st.code 网格
+        cand_df = pd.DataFrame({
+            "代码": cand_list,
+            "名称": [name_map.get(c, "") for c in cand_list],
+            "已诊断": ["是" if c in st.session_state.get("_wf_diag_done", set()) else "否"
+                       for c in cand_list],
+        })
+        st.dataframe(cand_df.head(50), width='stretch', hide_index=True)
 
         selected = st.multiselect(
             "选择候选股进行诊断",
@@ -903,66 +955,72 @@ def _run_deep_diagnostics(codes: list, name_map: dict, silent: bool = False):
     st.divider()
     st.subheader("📋 个股详细诊断报告")
 
+    # 汇总结论卡（结论前置）
+    conclusion_card(
+        f"多头 {green} · 关注 {yellow} · 观察 {orange} · 回避 {red}",
+        [f"综合评分 TOP1: {df_diag.iloc[0]['name']} ({df_diag.iloc[0]['code']}) {df_diag.iloc[0]['composite']}分",
+         f"技术面最高 {int(df_diag['tech_score'].max())}/70 · 资金面最高 {int(df_diag['flow_score'].max())}/40",
+         f"样本 {len(results)} 只 · 按综合分从高到低排序"],
+        tone="bull" if green else ("info" if yellow else "flat"),
+        title="深度诊断结论",
+    )
+
     for _, r in df_diag.iterrows():
         code = r["code"]
         name = r.get("name", "")
+        trend = r.get("trend", {}) or {}
+
+        _grade = ("bull" if r["composite"] >= 70
+                  else "info" if r["composite"] >= 55
+                  else "warn" if r["composite"] >= 40 else "bear")
         with st.expander(f"{r['rating']} {code} {name} — 综合 {r['composite']} 分"):
-            c1, c2 = st.columns(2)
+            top_l, top_r = st.columns([1, 3])
+            with top_l:
+                badge(_grade, score=r["composite"])
+            with top_r:
+                st.caption(
+                    f"技术面 {r['tech_score']}/70 · 资金面 {r['flow_score']}/40 · "
+                    f"基本面 {r['funda_score']}/28 · 机构 {r['insti_score']}/12")
 
-            with c1:
-                st.markdown("**🔧 技术面**")
-                trend = r.get("trend", {}) or {}
-                st.write(f"- 趋势状态: {trend.get('status', 'N/A')}")
-                st.write(f"- 20日收益: {r.get('ret_20d', 'N/A')}%")
-                st.write(f"- 60日收益: {r.get('ret_60d', 'N/A')}%")
-                st.write(f"- RSI(14): {r.get('rsi14', 'N/A')}")
-                st.write(f"- 60日波动: {r.get('vol_60d', 'N/A')}%")
-                st.write(f"- MA20: {r.get('ma20', 'N/A')}")
-                st.write(f"- MA60: {r.get('ma60', 'N/A')}")
-                st.write(f"- MA120: {r.get('ma120', 'N/A')}")
-                st.write(f"- MACD柱: {r.get('macd_hist', 'N/A')}")
-
-                # 多周期共振信号
-                mtf = r.get("mtf", {})
+            ca1, ca2 = st.columns(2)
+            with ca1:
+                diagnosis_section("技术面", "🔧", r["tech_score"], 70, [
+                    ("趋势状态", trend.get('status', 'N/A')),
+                    ("20日收益", f"{r.get('ret_20d', 'N/A')}%"),
+                    ("RSI(14)", r.get('rsi14', 'N/A')),
+                    ("60日波动", f"{r.get('vol_60d', 'N/A')}%"),
+                    ("MA20", r.get('ma20', 'N/A')),
+                    ("MA60", r.get('ma60', 'N/A')),
+                ])
                 mtf_signals = r.get("mtf_signals", [])
                 if mtf_signals:
-                    st.markdown("**🔄 多周期共振**")
-                    for sig in mtf_signals:
-                        emoji = "🔴" if sig.get("strength") == "strong" else "🟡"
-                        st.write(f"- {emoji} {sig.get('type', '')}")
+                    st.caption("🔄 多周期共振: " + " / ".join(
+                        sig.get('type', '') for sig in mtf_signals))
                 if r.get("mtf_score", 0) > 0:
-                    st.write(f"- 多周期评分: {r['mtf_score']}/100")
+                    st.caption(f"多周期评分 {r['mtf_score']}/100")
+            with ca2:
+                diagnosis_section("资金面", "💰", r["flow_score"], 40, [
+                    ("今日主力净流入", f"{r.get('ff_today_yi', 'N/A')} 亿"),
+                    ("近10日均值", f"{r.get('ff_10d_mean_yi', 'N/A')} 亿"),
+                    ("近10日累计", f"{r.get('ff_10d_sum_yi', 'N/A')} 亿"),
+                ])
 
-                st.caption(f"得分: {r['tech_score']}/70")
-
-            with c2:
-                st.markdown("**💰 资金面**")
-                st.write(f"- 今日主力净流入: {r.get('ff_today_yi', 'N/A')} 亿")
-                st.write(f"- 近10日均值: {r.get('ff_10d_mean_yi', 'N/A')} 亿")
-                st.write(f"- 近10日累计: {r.get('ff_10d_sum_yi', 'N/A')} 亿")
-                st.caption(f"得分: {r['flow_score']}/40")
-
-                st.markdown("**📊 基本面**")
-                st.write(f"- ROE: {r.get('roe', 'N/A')}%")
-                st.write(f"- 利润增速: {r.get('profit_yoy', 'N/A')}%")
-                st.write(f"- 毛利率: {r.get('gross_margin', 'N/A')}%")
-                st.write(f"- 负债率: {r.get('debt_ratio', 'N/A')}%")
-                st.caption(f"得分: {r['funda_score']}/28")
-
-                st.markdown("**🏛️ 机构行为**")
+            cb1, cb2 = st.columns(2)
+            with cb1:
+                diagnosis_section("基本面", "📊", r["funda_score"], 28, [
+                    ("ROE", f"{r.get('roe', 'N/A')}%"),
+                    ("利润增速", f"{r.get('profit_yoy', 'N/A')}%"),
+                    ("毛利率", f"{r.get('gross_margin', 'N/A')}%"),
+                    ("负债率", f"{r.get('debt_ratio', 'N/A')}%"),
+                ])
+            with cb2:
                 zt_codes = set(str(c).zfill(6) for c in st.session_state.get("wf_candidates", set())
                                 if str(c).zfill(6) in st.session_state.get("wf_zt_codes", set()))
                 ff_top = st.session_state.get("wf_overlap_ff", set())
-                flags = []
-                if code in zt_codes:
-                    flags.append("🔥 涨停板重叠")
-                if code in ff_top:
-                    flags.append("💰 资金TOP20重叠")
-                if flags:
-                    for f in flags:
-                        st.write(f"- {f}")
-                else:
-                    st.write("- 无特殊机构信号")
-                st.caption(f"得分: {r['insti_score']}/12")
+                items = ([("🔥 涨停板重叠", "")] if code in zt_codes else [])
+                items += ([("💰 资金TOP20重叠", "")] if code in ff_top else [])
+                if not items:
+                    items = [("无特殊机构信号", "")]
+                diagnosis_section("机构行为", "🏛️", r["insti_score"], 12, items)
 
     st.success(f"✅ 深度诊断完成！共分析 {len(results)} 只候选股")

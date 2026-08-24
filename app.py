@@ -7,14 +7,24 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 
 import streamlit as st
-import pandas as pd
-from datetime import datetime
 
 from strategies import MACrossStrategy, MACDStrategy, RSIStrategy
 from strategies import BollingerStrategy, TripleMAStrategy, KDJStrategy
 from strategies import DonchianStrategy, ATRStrategy
 
 st.set_page_config(page_title="WinnerK股票查询系统", page_icon="📈", layout="wide")
+
+from ui.theme import apply_global_css
+apply_global_css()
+
+
+def _is_lock_error(msg: str) -> bool:
+    """判断是否为 DuckDB 文件锁被占用的瞬时错误（常因后台定时任务/另一个实例同步中）。"""
+    m = str(msg)
+    return any(pat in m for pat in (
+        "Cannot open file", "另一个程序正在使用此文件", "already open",
+        "Could not set lock", "lock", "being used by another process",
+    ))
 
 
 def _startup_tdx_sync():
@@ -42,38 +52,60 @@ def _startup_tdx_sync():
         }
         return
 
-    try:
-        stats_before = get_db_stats()
-        result = sync_from_tdx(str(vipdoc_path), full_import=False)
+    import time as _t
 
-        if result.get("errors") and any(
-            "未找到券商客户端目录" in str(e) for e in result["errors"]
-        ):
+    last_exc = None
+    stats_after = None
+    result = None
+    # 数据库文件锁（另一个进程同步中）通常是瞬时：最多重试 3 次
+    for attempt in range(4):
+        try:
+            stats_after = get_db_stats()
+            result = sync_from_tdx(str(vipdoc_path), full_import=False)
+            last_exc = None
+            break
+        except Exception as e:
+            last_exc = e
+            if not _is_lock_error(str(e)):
+                break
+            _t.sleep(1.5 * (attempt + 1))
+
+    if last_exc is not None:
+        if _is_lock_error(str(last_exc)):
+            # 重试后仍被占用 → 友好降级，允许下次交互手动重试
             st.session_state._tdx_startup_result = {
-                "status": "no_path",
-                "message": "vipdoc 目录为空或不存在 .day 文件"
+                "status": "locked",
+                "message": "数据库暂时被占用（可能正在后台同步），稍后重试",
             }
-            return
+        else:
+            st.session_state._tdx_startup_result = {
+                "status": "error",
+                "message": str(last_exc),
+            }
+        return
 
-        stats_after = get_db_stats()
-        new_stocks = result.get("imported", 0)
-        skipped = result.get("skipped", 0)
-        errors = result.get("errors", [])
+    if result.get("errors") and any(
+        "未找到券商客户端目录" in str(e) for e in result["errors"]
+    ):
+        st.session_state._tdx_startup_result = {
+            "status": "no_path",
+            "message": "vipdoc 目录为空或不存在 .day 文件"
+        }
+        return
 
-        st.session_state._tdx_startup_result = {
-            "status": "ok",
-            "new_stocks": new_stocks,
-            "skipped": skipped,
-            "errors": errors,
-            "vipdoc_path": str(vipdoc_path),
-            "stock_count": stats_after.get("stock_count", 0),
-            "max_date": stats_after.get("max_date", ""),
-        }
-    except Exception as e:
-        st.session_state._tdx_startup_result = {
-            "status": "error",
-            "message": str(e)
-        }
+    new_stocks = result.get("imported", 0)
+    skipped = result.get("skipped", 0)
+    errors = result.get("errors", [])
+
+    st.session_state._tdx_startup_result = {
+        "status": "ok",
+        "new_stocks": new_stocks,
+        "skipped": skipped,
+        "errors": errors,
+        "vipdoc_path": str(vipdoc_path),
+        "stock_count": stats_after.get("stock_count", 0),
+        "max_date": stats_after.get("max_date", ""),
+    }
 
 
 def _startup_fund_flow_sync():
@@ -146,6 +178,7 @@ from tabs.tab13_fundamental import render as render_tab10
 from tabs.tab14_industry import render as render_tab11
 from tabs.tab15_database import render as render_tab12
 from tabs.tab16_advanced import render as render_tab13
+from tabs.tab_strategy_templates import render as render_stpl
 
 PAGES = {
     "📈 市场分析": [
@@ -167,6 +200,7 @@ PAGES = {
         st.Page(render_tab8, title="组合回测", icon="🧺", url_path="portfolio"),
         st.Page(render_ml, title="ML因子研究", icon="🧠", url_path="ml"),
         st.Page(render_sv, title="信号验证", icon="📡", url_path="signal-validation"),
+        st.Page(render_stpl, title="策略模板", icon="🧩", url_path="strategy-templates"),
         st.Page(render_tab13, title="高级分析", icon="🔬", url_path="advanced"),
     ],
     "🗄️ 数据": [
@@ -176,225 +210,19 @@ PAGES = {
 
 pg = st.navigation(PAGES, position="sidebar")
 
-# =========================== 侧边栏 ===========================
-
-st.sidebar.title("📈 WinnerK股票查询系统")
-
-# ── 工作模式切换 ──
-if "work_mode" not in st.session_state:
-    st.session_state.work_mode = "回测"
-if "symbol" not in st.session_state:
-    st.session_state.symbol = "600036"
-
-mode_idx = 0 if st.session_state.work_mode == "回测" else 1
-work_mode_label = st.sidebar.radio(
-    "工作模式",
-    ["📊 回测工作台", "📈 市场分析"],
-    index=mode_idx,
-    key="work_mode_radio",
+# =========================== 侧边栏（三区分流） ===========================
+# ① 导航区 由 st.navigation 自带；
+# ② 全局控制区（工作模式/搜索/快捷选股/数据状态）→ ui.sidebar.render_global_controls
+# ③ 页内上下文 → 回测参数折叠以保留共享状态；自动日报/推送折叠。
+from ui.sidebar import (
+    render_global_controls, render_backtest_params, render_settings,
 )
-st.session_state.work_mode = "回测" if "回测" in work_mode_label else "市场分析"
 
-if st.session_state.work_mode == "回测":
-    # ═══════════════ 回测工作台侧边栏 ═══════════════
-
-    st.sidebar.subheader("快捷选股")
-    cols = st.sidebar.columns(5)
-    for i, (name, code) in enumerate(HOT_STOCKS.items()):
-        with cols[i]:
-            if st.button(name, key=f"hot_{code}", width='stretch'):
-                st.session_state["symbol"] = code
-
-    symbol = st.sidebar.text_input(
-        "股票代码", value=st.session_state.get("symbol", "600036"),
-        help="输入6位代码，如 600036（沪深A股）"
-    )
-    if symbol:
-        st.session_state["symbol"] = symbol
-
-    strategy_name = st.sidebar.selectbox("交易策略", list(STRATEGY_MAP.keys()))
-    strategy_cls = STRATEGY_MAP[strategy_name]
-    st.session_state["strategy_name"] = strategy_name
-    st.session_state["strategy_cls"] = strategy_cls
-
-    st.sidebar.subheader("策略参数")
-    params = {}
-    if strategy_name == "双均线 (MA Cross)":
-        params["fast_period"] = st.sidebar.number_input("快线周期", 2, 30, 5, step=1)
-        params["slow_period"] = st.sidebar.number_input("慢线周期", 10, 60, 20, step=1)
-    elif strategy_name == "MACD":
-        params["fast_period"] = st.sidebar.number_input("快线", 6, 20, 12, step=1)
-        params["slow_period"] = st.sidebar.number_input("慢线", 20, 40, 26, step=1)
-        params["signal_period"] = st.sidebar.number_input("信号线", 5, 15, 9, step=1)
-    elif strategy_name == "RSI 超买超卖":
-        params["rsi_period"] = st.sidebar.number_input("RSI 周期", 5, 30, 14, step=1)
-        params["oversold"] = st.sidebar.number_input("超卖阈值", 15, 40, 30, step=1)
-        params["overbought"] = st.sidebar.number_input("超买阈值", 60, 90, 70, step=1)
-    elif strategy_name == "布林带 (Bollinger)":
-        params["period"] = st.sidebar.number_input("布林带周期", 5, 50, 20, step=1)
-        params["devfactor"] = st.sidebar.number_input("标准差倍数", 1.0, 4.0, 2.0, step=0.5)
-    elif strategy_name == "三均线 (Triple MA)":
-        params["fast_period"] = st.sidebar.number_input("快线周期", 2, 15, 5, step=1)
-        params["mid_period"] = st.sidebar.number_input("中线周期", 10, 30, 20, step=1)
-        params["slow_period"] = st.sidebar.number_input("慢线周期", 30, 90, 60, step=1)
-    elif strategy_name == "KDJ":
-        params["period"] = st.sidebar.number_input("KDJ周期", 5, 20, 9, step=1)
-        params["period_dfast"] = st.sidebar.number_input("K值平滑", 2, 5, 3, step=1)
-        params["upper"] = st.sidebar.number_input("超买区", 60, 90, 80, step=1)
-        params["lower"] = st.sidebar.number_input("超卖区", 10, 40, 20, step=1)
-    elif strategy_name == "唐奇安通道 (Donchian)":
-        params["period"] = st.sidebar.number_input("通道周期", 10, 60, 20, step=1)
-    elif strategy_name == "ATR动态跟踪":
-        params["fast_period"] = st.sidebar.number_input("快线周期", 5, 20, 10, step=1)
-        params["slow_period"] = st.sidebar.number_input("慢线周期", 20, 60, 30, step=1)
-        params["atr_period"] = st.sidebar.number_input("ATR周期", 7, 21, 14, step=1)
-        params["atr_mult"] = st.sidebar.number_input("ATR倍数", 1.0, 6.0, 3.0, step=0.5)
-
-    st.sidebar.subheader("风控参数")
-    params["stop_loss"] = st.sidebar.number_input("止损比例 (%)", 0, 20, 5, step=1) / 100
-    params["take_profit"] = st.sidebar.number_input("止盈比例 (%)", 0, 50, 15, step=1) / 100
-    params["position_pct"] = st.sidebar.number_input("仓位比例 (%)", 10, 100, 95, step=1) / 100
-    st.session_state["market_timing"] = st.sidebar.toggle(
-        "启用大盘择时（牛熊自动调仓）", value=st.session_state.get("market_timing", False),
-        help="基于沪深300均线趋势，牛市满仓/震荡60%/熊市40%，高波动再减仓")
-    st.session_state["params"] = params
-
-    st.sidebar.subheader("回测日期")
-    start_date = st.sidebar.date_input("起始日期", value=datetime(2024, 1, 1))
-    end_date = st.sidebar.date_input("结束日期", value=datetime(2025, 5, 8))
-    st.session_state["start_date"] = start_date
-    st.session_state["end_date"] = end_date
-
-    initial_cash = st.sidebar.number_input("初始资金 (元)", value=1000000, step=100000)
-    st.session_state["initial_cash"] = initial_cash
-
-    benchmark = st.sidebar.selectbox("对比基准", ["沪深300", "中证500"], index=0)
-    st.session_state["benchmark"] = "000300" if benchmark == "沪深300" else "000905"
-
-    if st.sidebar.button("🚀 运行回测", type="primary", width='stretch'):
-        st.session_state["run_backtest"] = True
-
-    st.sidebar.markdown("---")
-    # 数据源状态：TDX 本地 + 资金流快照
-    sync_result = st.session_state.get("_tdx_startup_result", {})
-    if sync_result.get("status") == "ok":
-        st.sidebar.success(
-            f"📡 券商数据已同步\n"
-            f"更新: {sync_result['new_stocks']} 只, 跳过: {sync_result['skipped']} 只\n"
-            f"最新: {sync_result.get('max_date', 'N/A')}"
-        )
-    elif sync_result.get("status") in ("not_found", "no_path"):
-        st.sidebar.caption("📡 券商本地: 未检测到 → 在线获取")
-    elif sync_result.get("status") == "error":
-        st.sidebar.warning(f"⚠️ 券商同步异常: {sync_result.get('message', '')}")
-    else:
-        st.sidebar.caption("数据源: AKShare (新浪/东方财富)")
-
-    ff_result = st.session_state.get("_ff_startup_result", {})
-    if ff_result.get("status") == "ok":
-        st.sidebar.caption(f"💰 资金流快照: {ff_result['date']} ({ff_result['count']}只)")
-    elif ff_result.get("status") == "error":
-        st.sidebar.caption(f"💰 资金流: {ff_result.get('message', '未同步')}")
-
-    st.sidebar.caption("引擎: backtrader")
-
-else:
-    # ═══════════════ 市场分析侧边栏（极简） ═══════════════
-    st.sidebar.subheader("快捷选股")
-    cols = st.sidebar.columns(5)
-    for i, (name, code) in enumerate(HOT_STOCKS.items()):
-        with cols[i]:
-            if st.button(name, key=f"hot_mkt_{code}", width='stretch'):
-                st.session_state["symbol"] = code
-                st.session_state.work_mode = "回测"
-
-    st.sidebar.markdown("---")
-    st.sidebar.caption("当前模式：市场分析")
-    st.sidebar.caption("切换至「回测工作台」可运行策略回测")
-    st.sidebar.markdown("---")
-    # 数据源状态
-    sync_result = st.session_state.get("_tdx_startup_result", {})
-    if sync_result.get("status") == "ok":
-        st.sidebar.success(f"📡 券商已同步 | 最新: {sync_result.get('max_date', 'N/A')}")
-    elif sync_result.get("status") in ("not_found", "no_path"):
-        st.sidebar.caption("📡 券商本地: 未检测到 → 在线获取")
-    elif sync_result.get("status") == "error":
-        st.sidebar.warning(f"⚠️ 同步异常: {sync_result.get('message', '')}")
-    else:
-        st.sidebar.caption("数据源: AKShare (新浪/东方财富)")
-
-    ff_result = st.session_state.get("_ff_startup_result", {})
-    if ff_result.get("status") == "ok":
-        st.sidebar.caption(f"💰 资金流快照: {ff_result['date']} ({ff_result['count']}只)")
-
-    st.sidebar.caption("引擎: backtrader")
-
-# ── 定时任务 & 推送（两侧边栏通用） ──
-st.sidebar.markdown("---")
-st.sidebar.subheader("🔔 自动日报")
-
-from scheduler import get_config, save_config, run_now, start_scheduler
-
-sched_cfg = get_config()
-
-# 开关
-if "sched_enabled" not in st.session_state:
-    st.session_state.sched_enabled = sched_cfg.get("enabled", False)
-    st.session_state.sched_started = False
-
-enabled = st.sidebar.toggle(
-    "启用工作日自动选股",
-    value=st.session_state.sched_enabled,
-    key="sched_toggle"
-)
-if enabled != st.session_state.sched_enabled:
-    st.session_state.sched_enabled = enabled
-    sched_cfg["enabled"] = enabled
-    save_config(sched_cfg)
-    if enabled and not st.session_state.sched_started:
-        start_scheduler()
-        st.session_state.sched_started = True
-
-with st.sidebar.expander("⚙️ 推送设置", expanded=False):
-    wechat_url = st.text_input(
-        "企业微信 Webhook",
-        value=sched_cfg.get("wechat_webhook_url", ""),
-        type="password",
-        placeholder="https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=...",
-        key="sched_wechat",
-    )
-    dingtalk_url = st.text_input(
-        "钉钉 Webhook",
-        value=sched_cfg.get("dingtalk_webhook_url", ""),
-        type="password",
-        placeholder="https://oapi.dingtalk.com/robot/send?access_token=...",
-        key="sched_dingtalk",
-    )
-    run_time = st.text_input(
-        "执行时间 (HH:MM)",
-        value=sched_cfg.get("run_time", "09:00"),
-        key="sched_time",
-    )
-    desktop = st.checkbox("桌面通知", value=sched_cfg.get("desktop_notify", True), key="sched_desktop")
-
-    if st.button("💾 保存推送设置", key="sched_save"):
-        sched_cfg["wechat_webhook_url"] = wechat_url
-        sched_cfg["dingtalk_webhook_url"] = dingtalk_url
-        sched_cfg["run_time"] = run_time
-        sched_cfg["desktop_notify"] = desktop
-        save_config(sched_cfg)
-        st.success("已保存")
-
-    if st.button("▶️ 立即运行一次", key="sched_run_now"):
-        with st.spinner("执行中..."):
-            report = run_now()
-        st.success("日报已生成")
-        with st.expander("查看报告"):
-            st.markdown(report)
-
-last_run = sched_cfg.get("last_run", "")
-if last_run:
-    st.sidebar.caption(f"上次执行: {last_run[:16]}")
+render_global_controls(HOT_STOCKS)
+st.sidebar.divider()
+render_backtest_params(STRATEGY_MAP)
+st.sidebar.divider()
+render_settings()
 
 # =========================== 页面路由 ===========================
 pg.run()

@@ -55,7 +55,7 @@ def _plot_northbound_flow(df: pd.DataFrame) -> go.Figure:
         hovertemplate="%{x|%Y-%m-%d}<br>20日均值: %{y:.0f}亿<extra></extra>"
     ), row=2, col=1)
 
-    fig.update_layout(height=500, showlegend=False, template="plotly_white",
+    fig.update_layout(height=500, showlegend=False, template="winnerk",
                       hovermode="x unified",
                       margin=dict(l=20, r=20, t=40, b=20))
     fig.update_xaxes(rangeslider_visible=False)
@@ -211,7 +211,7 @@ def render():
                     ), row=2, col=1)
 
                 fig.update_layout(height=500, showlegend=True,
-                                  template="plotly_white", hovermode="x unified",
+                                  template="winnerk", hovermode="x unified",
                                   margin=dict(l=20, r=20, t=40, b=20),
                                   legend=dict(orientation="h", yanchor="bottom", y=1.02))
                 fig.update_xaxes(rangeslider_visible=False)
@@ -344,7 +344,7 @@ def render():
 
             fig.update_layout(
                 height=500, showlegend=True,
-                template="plotly_white", hovermode="x unified",
+                template="winnerk", hovermode="x unified",
                 margin=dict(l=20, r=20, t=40, b=20),
                 legend=dict(orientation="h", yanchor="bottom", y=1.02),
             )
@@ -365,7 +365,7 @@ def render():
                 ))
                 fig2.update_layout(
                     height=250, showlegend=False,
-                    template="plotly_white",
+                    template="winnerk",
                     margin=dict(l=20, r=20, t=20, b=20),
                 )
                 st.plotly_chart(fig2, width='stretch')

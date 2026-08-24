@@ -47,7 +47,7 @@ def _plot_financial_radar(data: dict) -> go.Figure:
 
     fig.update_layout(
         polar=dict(radialaxis=dict(visible=True, range=[0, max(max(values), max(thresholds)) * 1.2])),
-        height=400, template="plotly_white",
+        height=400, template="winnerk",
         margin=dict(l=40, r=40, t=20, b=20),
         legend=dict(yanchor="top", y=0.99, xanchor="left", x=0.01),
     )

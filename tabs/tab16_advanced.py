@@ -120,7 +120,7 @@ def _render_factor_ranking():
         marker_color="#1E88E5", opacity=0.8,
     )])
     fig.update_layout(
-        height=200, template="plotly_white",
+        height=200, template="winnerk",
         margin=dict(l=10, r=10, t=10, b=10),
         xaxis_title="综合得分", yaxis_title="股票数",
     )
@@ -143,7 +143,7 @@ def _render_factor_ranking():
         textposition="outside",
     )])
     fig_top.update_layout(
-        height=400, template="plotly_white",
+        height=400, template="winnerk",
         margin=dict(l=10, r=50, t=10, b=10),
         yaxis=dict(autorange="reversed"),
     )
@@ -272,7 +272,7 @@ def _render_industry_rotation():
                 textposition="outside",
             )])
             fig.update_layout(
-                height=600, template="plotly_white",
+                height=600, template="winnerk",
                 margin=dict(l=20, r=50, t=10, b=10),
                 xaxis_title="综合动量得分",
             )
@@ -323,7 +323,7 @@ def _render_industry_rotation():
             )])
             fig.update_layout(
                 height=max(400, len(hm) * 20),
-                template="plotly_white",
+                template="winnerk",
                 margin=dict(l=20, r=20, t=10, b=10),
                 xaxis_title="周结束日期",
                 yaxis_title="行业",
@@ -368,7 +368,7 @@ def _render_industry_rotation():
         )])
         fig.add_hline(y=100, line_dash="dash", line_color="gray", opacity=0.5)
         fig.update_layout(
-            height=350, template="plotly_white",
+            height=350, template="winnerk",
             margin=dict(l=10, r=10, t=10, b=10),
             yaxis_title="基准=100",
             hovermode="x unified",
@@ -435,7 +435,7 @@ def _render_correlation():
         text=[[f"{v:.3f}" for v in row] for row in corr.values],
         texttemplate="%{text}", textfont={"size": 9},
     )])
-    fig.update_layout(height=max(350, len(corr) * 30), template="plotly_white",
+    fig.update_layout(height=max(350, len(corr) * 30), template="winnerk",
                       margin=dict(l=20, r=20, t=10, b=10))
     st.plotly_chart(fig, width='stretch', key="corr_heatmap")
 
@@ -551,7 +551,7 @@ def _render_batch_backtest():
         textposition="outside",
     )])
     fig.add_vline(x=0, line_dash="dash", line_color="gray", opacity=0.5)
-    fig.update_layout(height=400, template="plotly_white", margin=dict(l=20, r=50, t=10, b=10))
+    fig.update_layout(height=400, template="winnerk", margin=dict(l=20, r=50, t=10, b=10))
     st.plotly_chart(fig, width='stretch', key="bb_chart")
 
     display = _add_names(r)
@@ -608,7 +608,7 @@ def _render_quant_signals():
             ))
             fig.add_hline(y=75, line_dash="dash", line_color="#E53935", opacity=0.5, annotation_text="顶部")
             fig.add_hline(y=25, line_dash="dash", line_color="#4CAF50", opacity=0.5, annotation_text="底部")
-            fig.update_layout(height=300, template="plotly_white",
+            fig.update_layout(height=300, template="winnerk",
                               margin=dict(l=10, r=10, t=10, b=10),
                               yaxis_range=[0, 100], yaxis_title="择时信号")
             st.plotly_chart(fig, width='stretch', key="breadth_chart")
@@ -873,10 +873,18 @@ def _render_stock_diagnosis():
             tech = compute_full_analysis(code)
             ff_summary = get_fund_flow_summary(code, days=20)
             ff_df = get_individual_fund_flow(code)
+            # 筹码分布（约210日换手成本分布）
+            from data.chip_distribution import compute_chip_distribution
+            chip = None
+            try:
+                chip = compute_chip_distribution(code)
+            except Exception:
+                chip = None
         st.session_state[f"_diag_{code}"] = {
             "tech": tech,
             "ff_summary": ff_summary,
             "ff_df": ff_df,
+            "chip": chip,
         }
         st.session_state["run_diag"] = False
         st.session_state["symbol"] = code
@@ -973,6 +981,56 @@ def _render_stock_diagnosis():
                       delta="净流出" if recent_total < 0 else "净流入")
     else:
         st.caption("暂无资金流数据（需每日使用以积累历史）")
+
+    # ═══════════════════════════════
+    # Part B+: 筹码分布（换手成本分布）
+    # ═══════════════════════════════
+    chip = diag.get("chip")
+    st.divider()
+    st.markdown("### 🎯 筹码分布（换手成本分布）")
+    st.caption("近210个交易日按换手率加权的成本分布 — 判断主力成本区、获利盘与支撑/压力位")
+    if chip:
+        c_c1, c_c2, c_c3, c_c4 = st.columns(4)
+        with c_c1:
+            st.metric("平均成本", f"{chip['avg_cost']:.2f}")
+        with c_c2:
+            st.metric("获利盘", f"{chip['profit_ratio']:.1f}%",
+                      help="现价下方筹码占比，越高表示浮盈越多")
+        with c_c3:
+            st.metric("套牢盘", f"{chip['loss_ratio']:.1f}%")
+        with c_c4:
+            st.metric("峰值成本", f"{chip['peak_price']:.2f}",
+                      help="筹码最集中的价格，常为主力成本区")
+        st.caption(
+            f"**90%成本区**: {chip['p90_low']:.2f} ~ {chip['p90_high']:.2f}  |  "
+            f"**现价**: {chip['current_price']:.2f}  |  数据口径: {chip['note']}"
+        )
+        cd_df = chip["cost_df"]
+        fig_chip = go.Figure()
+        fig_chip.add_trace(go.Scatter(
+            x=cd_df["price_bin"], y=cd_df["chip_pct"],
+            mode="lines", fill="tozeroy", name="筹码占比",
+            line=dict(color="#42A5F5", width=2),
+            fillcolor="rgba(66,165,245,0.3)",
+        ))
+        fig_chip.add_vline(x=chip["current_price"], line_dash="dash", line_color="#ef5350",
+                           annotation_text=f"现价 {chip['current_price']:.2f}")
+        fig_chip.add_vline(x=chip["avg_cost"], line_dash="dot", line_color="#26a69a",
+                           annotation_text=f"成本 {chip['avg_cost']:.2f}")
+        fig_chip.update_layout(
+            height=320,
+            xaxis_title="价格(元)", yaxis_title="筹码占比(%)",
+            margin=dict(l=20, r=20, t=30, b=30),
+        )
+        st.plotly_chart(fig_chip, width='stretch')
+        st.caption(
+            "💡 获利盘=现价下方筹码占比；90%成本区=覆盖5%~95%筹码的价格区间，"
+            "下沿为强支撑、上沿为强压力；现价跌破平均成本且套牢盘高 → 上方抛压大"
+        )
+        with st.expander("筹码分布明细"):
+            st.dataframe(cd_df.round(2), width='stretch', hide_index=True)
+    else:
+        st.info("筹码分布数据不足（需至少20个交易日K线），或该股票历史数据缺失")
 
     # ═══════════════════════════════
     # Part C: 图表区

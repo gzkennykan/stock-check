@@ -283,7 +283,7 @@ def render():
                     textposition="outside",
                 )])
                 fig_dist.update_layout(
-                    height=350, template="plotly_white",
+                    height=350, template="winnerk",
                     margin=dict(l=20, r=20, t=20, b=60),
                     xaxis_tickangle=-45,
                     yaxis_title="股票数量",

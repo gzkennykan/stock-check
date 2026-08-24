@@ -294,14 +294,48 @@ def style_pct_col(style, col: str):
 
     用法:
         st.dataframe(style_pct_col(df.style, "涨跌幅(%)"), column_config={...})
+    注意：着色列会牺牲该列的可排序性。
     """
+    from ui.theme import UP, DOWN
     if col not in style.data.columns:
         return style
-    fn = (lambda v: "color:#E53935;font-weight:600"
+    fn = (lambda v: f"color:{UP};font-weight:600"
                     if v > 0
-                    else ("color:#43A047;font-weight:600" if v < 0 else ""))
+                    else (f"color:{DOWN};font-weight:600" if v < 0 else ""))
     # pandas >= 2.1 用 Styler.map，旧版本用 Styler.applymap
     m = getattr(style, "map", None) or getattr(style, "applymap", None)
     if m is None:
         return style
     return m(fn, subset=[col])
+
+
+def render_table(df: pd.DataFrame, *, pct_cols=(), money_cols=(), num_cols=(),
+                 width="stretch", hide_index=True, color_sign=False) -> None:
+    """统一表格渲染：金额/百分比列用 NumberColumn 格式化（保留可排序）。
+
+    参数:
+        pct_cols:   百分比列名（显示为 %+2f%%）
+        money_cols: 金额列名（保留数值，显示为 2 位），单位请写进列名如「主力净额(亿)」
+        num_cols:   其余保留 2 位小数的数值列
+        color_sign: True 时给第一个 pct_col 加红涨绿跌着色（该列不可排序）
+
+    说明：金额保留数值而非转成"1.23亿"字符串，以便排序；对比体验参见 round_df。
+    """
+    cfg = {}
+    for c in pct_cols:
+        if c in df.columns:
+            cfg[c] = st.column_config.NumberColumn(format="%+.2f%%")
+    for c in money_cols:
+        if c in df.columns:
+            cfg[c] = st.column_config.NumberColumn(format="%.2f")
+    for c in num_cols:
+        if c not in cfg and c in df.columns:
+            cfg[c] = st.column_config.NumberColumn(format="%.2f")
+    for c in ("代码", "名称", "code", "name", "symbol"):
+        if c in df.columns:
+            cfg[c] = st.column_config.TextColumn(width="small")
+
+    styled = df.style
+    if color_sign and pct_cols:
+        styled = style_pct_col(df.style, pct_cols[0])
+    st.dataframe(styled, width=width, hide_index=hide_index, column_config=cfg)

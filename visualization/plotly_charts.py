@@ -66,7 +66,7 @@ def plot_equity_drawdown(equity: pd.Series, bm_equity: pd.Series = None,
         height=600, showlegend=bm_equity is not None and len(bm_equity) > 0,
         hovermode="x unified",
         margin=dict(l=20, r=20, t=40, b=20),
-        template="plotly_white",
+        template="winnerk",
         legend=dict(yanchor="top", y=0.99, xanchor="left", x=0.01),
     )
     fig.update_xaxes(rangeslider_visible=False)
@@ -104,7 +104,7 @@ def plot_kline(df: pd.DataFrame) -> go.Figure:
 
     fig.update_layout(
         height=500, showlegend=False,
-        template="plotly_white",
+        template="winnerk",
         margin=dict(l=20, r=20, t=20, b=20),
         xaxis_rangeslider_visible=False,
     )
@@ -135,7 +135,7 @@ def plot_comparison_chart(results: dict[str, dict]) -> go.Figure:
                          text=[f"{v:.1f}%" for v in dd], textposition="outside"),
                   row=1, col=3)
 
-    fig.update_layout(height=350, showlegend=False, template="plotly_white",
+    fig.update_layout(height=350, showlegend=False, template="winnerk",
                       margin=dict(l=20, r=20, t=40, b=20))
     return fig
 
@@ -155,7 +155,7 @@ def plot_comparison_curves(curves: dict[str, pd.Series]) -> go.Figure:
         ))
     fig.add_hline(y=0, line_dash="dash", line_color="gray", opacity=0.5)
     fig.update_layout(
-        height=400, template="plotly_white",
+        height=400, template="winnerk",
         hovermode="x unified",
         margin=dict(l=20, r=20, t=20, b=20),
         yaxis_title="累计收益率 (%)",
@@ -187,7 +187,7 @@ def plot_optimization_history(trials_df: pd.DataFrame, param_names: list[str]) -
             name=p
         ), row=1, col=i + 1)
 
-    fig.update_layout(height=300, showlegend=False, template="plotly_white",
+    fig.update_layout(height=300, showlegend=False, template="winnerk",
                       margin=dict(l=20, r=20, t=40, b=20))
     return fig
 
@@ -223,7 +223,7 @@ def plot_horizontal_bars(
     if height is None:
         height = max(300, len(labels) * 24)
     fig.update_layout(
-        height=height, template="plotly_white",
+        height=height, template="winnerk",
         margin=dict(l=20, r=60, t=10, b=10),
         xaxis_title=xaxis_title,
     )

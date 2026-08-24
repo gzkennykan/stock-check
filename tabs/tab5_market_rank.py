@@ -12,6 +12,8 @@ VIEWS = {
 
 def render():
     st.title("资金排名")
+    st.caption("ℹ️ 「资金净流入/净流出」采用同花顺统计口径（按单笔成交额分档推断主力，非逐笔精确数据）；"
+               "同一股票在不同软件(同花顺/东财/通达信)口径下数值可能有差异，建议用于方向与相对强弱参考。")
 
     col_view, col_refresh, col_info = st.columns([2, 2, 3])
     with col_view:

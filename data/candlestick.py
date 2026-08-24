@@ -73,7 +73,7 @@ def scan_all_candlestick_patterns(end_date: str = None) -> dict[str, pd.DataFram
         ]
         if not bullish.empty:
             results["看涨吞没"] = bullish[["symbol", "trade_date", "close", "volume"]
-                                    ].rename(columns={"trade_date": "date"})
+                                    ].rename(columns={"trade_date": "date"}).assign(signal=1)
 
         # 1B. 看跌吞没
         bearish = df[
@@ -84,7 +84,7 @@ def scan_all_candlestick_patterns(end_date: str = None) -> dict[str, pd.DataFram
         ]
         if not bearish.empty:
             results["看跌吞没"] = bearish[["symbol", "trade_date", "close", "volume"]
-                                    ].rename(columns={"trade_date": "date"})
+                                    ].rename(columns={"trade_date": "date"}).assign(signal=-1)
 
         # 2A. 锤子线 (Hammer)
         hammer = df[
@@ -96,7 +96,7 @@ def scan_all_candlestick_patterns(end_date: str = None) -> dict[str, pd.DataFram
         ]
         if not hammer.empty:
             results["锤子线"] = hammer[["symbol", "trade_date", "close", "volume"]
-                                  ].rename(columns={"trade_date": "date"})
+                                  ].rename(columns={"trade_date": "date"}).assign(signal=1)
 
         # 2B. 倒锤子 (Inverted Hammer)
         inv_hammer = df[
@@ -107,25 +107,18 @@ def scan_all_candlestick_patterns(end_date: str = None) -> dict[str, pd.DataFram
         ]
         if not inv_hammer.empty:
             results["倒锤子"] = inv_hammer[["symbol", "trade_date", "close", "volume"]
-                                     ].rename(columns={"trade_date": "date"})
+                                     ].rename(columns={"trade_date": "date"}).assign(signal=1)
 
-        # 3. 启明之星 (Morning Star): 阴线→小实体跳空→大阳线
+        # 3. 启明之星 (Morning Star): 前前阴 → 前阴 → 今大阳且收复前阴实体一半以上
         morning = df[
-            (df["prev2_close"] < df["prev2_close"].shift()) &  # 前前阴
-            (df["prev_close"].abs() < 0.02 * df["prev_open"]) |  # 中间小实体（简化：跳空）
-            (df["close"] > df["open"]) &                          # 今阳
+            (df["prev2_close"] < df["prev2_open"]) &  # 前前阴
+            (df["prev_close"] < df["prev_open"]) &    # 前阴
+            (df["close"] > df["open"]) &              # 今阳
             (df["close"] > (df["prev_open"] + df["prev_close"]) / 2)  # 收复过半
-        ]
-        # 简化版启明星
-        morning = df[
-            (df["close"] > df["open"]) &
-            (df["prev_close"] < df["prev_open"]) &
-            (df["prev2_close"] < df["prev2_open"]) &
-            (df["close"] > df["prev_open"])
         ]
         if not morning.empty:
             results["启明之星"] = morning[["symbol", "trade_date", "close", "volume"]
-                                     ].rename(columns={"trade_date": "date"})
+                                     ].rename(columns={"trade_date": "date"}).assign(signal=1)
 
         # 4. 黄昏之星 (Evening Star)
         evening = df[
@@ -136,7 +129,7 @@ def scan_all_candlestick_patterns(end_date: str = None) -> dict[str, pd.DataFram
         ]
         if not evening.empty:
             results["黄昏之星"] = evening[["symbol", "trade_date", "close", "volume"]
-                                     ].rename(columns={"trade_date": "date"})
+                                     ].rename(columns={"trade_date": "date"}).assign(signal=-1)
 
         # 5. 三白兵 (Three White Soldiers)
         white = df[
@@ -148,7 +141,7 @@ def scan_all_candlestick_patterns(end_date: str = None) -> dict[str, pd.DataFram
         ]
         if not white.empty:
             results["三白兵"] = white[["symbol", "trade_date", "close", "volume"]
-                                  ].rename(columns={"trade_date": "date"})
+                                  ].rename(columns={"trade_date": "date"}).assign(signal=1)
 
         # 6. 三黑鸦 (Three Black Crows)
         black = df[
@@ -160,12 +153,163 @@ def scan_all_candlestick_patterns(end_date: str = None) -> dict[str, pd.DataFram
         ]
         if not black.empty:
             results["三黑鸦"] = black[["symbol", "trade_date", "close", "volume"]
-                                  ].rename(columns={"trade_date": "date"})
+                                  ].rename(columns={"trade_date": "date"}).assign(signal=-1)
 
         return results
     finally:
         try: conn.close()
         except Exception: pass
+
+
+def scan_extended_patterns(end_date: str = None) -> dict[str, pd.DataFrame]:
+    """
+    自研扩展形态库：16 种补充形态（十字星族/孕线/刺透/乌云盖顶等）。
+
+    不依赖 pandas-ta / TA-Lib，纯 pandas 判定，全市场一次 SQL 扫描。
+
+    返回:
+        {形态中文名: DataFrame(symbol, date, close, volume, signal)}，signal=+1 看涨 / -1 看跌
+    """
+    from .database import get_latest_trading_date
+    if end_date is None:
+        end_date = get_latest_trading_date()
+        if end_date is None:
+            return {}
+
+    conn = get_connection(read_only=True)
+    try:
+        if not _table_exists(conn, "daily_kline"):
+            return {}
+
+        base = (pd.to_datetime(end_date) - pd.Timedelta(days=10)
+                ).strftime("%Y-%m-%d")
+
+        df = conn.execute("""
+            WITH candles AS (
+                SELECT symbol, trade_date, open, high, low, close, volume,
+                    close - open as body,
+                    ABS(close - open) / NULLIF(high - low, 0) as body_ratio,
+                    (high - GREATEST(open, close)) / NULLIF(high - low, 0) as upper_shadow,
+                    (LEAST(open, close) - low) / NULLIF(high - low, 0) as lower_shadow,
+                    LAG(open, 1)  OVER w as prev_open,
+                    LAG(close, 1) OVER w as prev_close,
+                    LAG(high, 1)  OVER w as prev_high,
+                    LAG(low, 1)   OVER w as prev_low,
+                    LAG(open, 2)  OVER w as prev2_open,
+                    LAG(close, 2) OVER w as prev2_close,
+                    LAG(high, 2)  OVER w as prev2_high,
+                    LAG(low, 2)   OVER w as prev2_low
+                FROM daily_kline
+                WHERE trade_date >= ?
+                WINDOW w AS (PARTITION BY symbol ORDER BY trade_date)
+            )
+            SELECT * FROM candles WHERE trade_date = ?
+        """, [base, end_date]).df()
+
+        if df.empty:
+            return {}
+
+        df["trade_date"] = pd.to_datetime(df["trade_date"])
+        return _detect_extended_patterns(df)
+    finally:
+        try: conn.close()
+        except Exception: pass
+
+
+def _detect_extended_patterns(df: pd.DataFrame) -> dict[str, pd.DataFrame]:
+    """
+    在特征 DataFrame 上检测 16 种扩展形态（纯 pandas，可独立单测）。
+
+    入参 df 需含列: symbol, trade_date, open, high, low, close, volume,
+        body, body_ratio, upper_shadow, lower_shadow,
+        prev_open, prev_close, prev_high, prev_low,
+        prev2_open, prev2_close, prev2_high, prev2_low
+
+    返回: {形态中文名: DataFrame(symbol, date, close, volume, signal)}
+    """
+    df = df.copy()
+    df["body_ratio"] = df["body_ratio"].fillna(0.0)
+    df["upper_shadow"] = df["upper_shadow"].fillna(0.0)
+    df["lower_shadow"] = df["lower_shadow"].fillna(0.0)
+
+    DOJI = df["body_ratio"] <= 0.15
+    results = {}
+
+    def _store(name, mask, signal):
+        sub = df[mask]
+        if not sub.empty:
+            results[name] = sub[["symbol", "trade_date", "close", "volume"]
+                                ].rename(columns={"trade_date": "date"}).assign(signal=signal)
+
+    # ── 看涨 (+1) ──
+    _store("蜻蜓十字星",
+           DOJI & (df["lower_shadow"] > 0.6) & (df["upper_shadow"] < 0.1), 1)
+    _store("刺透形态",
+           (df["prev_close"] < df["prev_open"]) &          # 前阴
+           (df["close"] > df["open"]) &                     # 今阳
+           (df["open"] <= df["prev_low"]) &                 # 低开于前低
+           (df["close"] > (df["prev_open"] + df["prev_close"]) / 2) &  # 收复过半
+           (df["close"] < df["prev_open"]), 1)              # 未创新高
+    _store("看涨孕线",
+           (df["prev_close"] < df["prev_open"]) &           # 前阴
+           (df["high"] <= df["prev_high"]) & (df["low"] >= df["prev_low"]) &
+           (df["body_ratio"] > 0.15) & (df["body_ratio"] < 0.6), 1)
+    _store("十字孕线看涨",
+           (df["prev_close"] < df["prev_open"]) & DOJI &
+           (df["high"] <= df["prev_high"]) & (df["low"] >= df["prev_low"]), 1)
+    _store("早晨十字星",
+           (df["prev2_close"] < df["prev2_open"]) &         # 前前阴
+           (df["body_ratio"] <= 0.15) &                     # 前十字(今日视作星)简化
+           (df["close"] > df["open"]) &
+           (df["close"] > (df["prev2_open"] + df["prev2_close"]) / 2), 1)
+    _store("看涨弃婴",
+           (df["prev2_close"] < df["prev2_open"]) &         # 前前阴
+           (df["prev_high"] < df["prev2_low"]) &            # 前跳空低开
+           (df["low"] > df["prev_high"]) &                  # 今跳空高开
+           (df["close"] > df["open"]), 1)                    # 今阳
+    _store("三内部上涨",
+           (df["prev2_close"] < df["prev2_open"]) &         # 前前阴
+           (df["prev_high"] < df["prev2_open"]) & (df["prev_low"] > df["prev2_close"]) &
+           (df["close"] > df["open"]) & (df["close"] > df["prev2_open"]), 1)
+    _store("光头光脚阳线",
+           (df["close"] > df["open"]) &
+           (df["upper_shadow"] < 0.05) & (df["lower_shadow"] < 0.05) &
+           (df["body_ratio"] > 0.6), 1)
+
+    # ── 看跌 (-1) ──
+    _store("墓碑十字星",
+           DOJI & (df["upper_shadow"] > 0.6) & (df["lower_shadow"] < 0.1), -1)
+    _store("上吊线",
+           (df["lower_shadow"] > 0.6) & (df["upper_shadow"] < 0.1) &
+           (df["body_ratio"] > 0) & (df["body_ratio"] < 0.4) &
+           (df["body"] < 0), -1)                              # 阴线长下影
+    _store("射击之星",
+           (df["upper_shadow"] > 0.6) & (df["lower_shadow"] < 0.1) &
+           (df["body_ratio"] > 0) & (df["body_ratio"] < 0.4), -1)
+    _store("乌云盖顶",
+           (df["prev_close"] > df["prev_open"]) &           # 前阳
+           (df["close"] < df["open"]) &                      # 今阴
+           (df["open"] > df["prev_high"]) &                  # 高开于前高
+           (df["close"] < (df["prev_open"] + df["prev_close"]) / 2) &
+           (df["close"] > df["prev_open"]), -1)
+    _store("看跌孕线",
+           (df["prev_close"] > df["prev_open"]) &           # 前阳
+           (df["high"] <= df["prev_high"]) & (df["low"] >= df["prev_low"]) &
+           (df["body_ratio"] > 0.15) & (df["body_ratio"] < 0.6), -1)
+    _store("十字孕线看跌",
+           (df["prev_close"] > df["prev_open"]) & DOJI &
+           (df["high"] <= df["prev_high"]) & (df["low"] >= df["prev_low"]), -1)
+    _store("黄昏十字星",
+           (df["prev2_close"] > df["prev2_open"]) &         # 前前阳
+           (df["body_ratio"] <= 0.15) &
+           (df["close"] < df["open"]) &
+           (df["close"] < (df["prev2_open"] + df["prev2_close"]) / 2), -1)
+    _store("光头光脚阴线",
+           (df["close"] < df["open"]) &
+           (df["upper_shadow"] < 0.05) & (df["lower_shadow"] < 0.05) &
+           (df["body_ratio"] > 0.6), -1)
+
+    return results
 
 
 # ══════════════════════════════════════════════════════════
@@ -226,14 +370,21 @@ def scan_pandas_ta_patterns(end_date: str = None) -> dict[str, pd.DataFrame]:
     """
     使用 pandas-ta 扫描 30+ K线形态（全市场）。
 
+    依赖: pandas_ta + TA-Lib（TA-Lib 未安装时大部分形态不可用，返回空字典，
+          由原生 8+16 种形态兜底）。
+
     返回:
-        {中文名称: DataFrame(symbol, date, close, ...)}
+        {中文名称: DataFrame(symbol, date, close, signal)}
     """
     try:
         import pandas_ta as ta
     except ImportError:
         return {"_error": pd.DataFrame(
             {"msg": ["请安装 pandas-ta: pip install pandas-ta"]})}
+    try:
+        import talib  # noqa: F401  检测 TA-Lib C 库
+    except ImportError:
+        return {}  # 无 TA-Lib → 大多数形态不可用，降级为原生形态
 
     from .database import get_latest_trading_date, get_connection
 
@@ -258,50 +409,52 @@ def scan_pandas_ta_patterns(end_date: str = None) -> dict[str, pd.DataFrame]:
         if df.empty:
             return {}
 
+        # cdl_pattern 用小写名（如 'hammer'），_PATTERNS_TA 键是大写（如 CDLHAMMER）
+        names_list = [k.replace("CDL", "").lower() for k in _PATTERNS_TA.keys()]
         results = {}
         grouped = df.groupby("symbol")
 
-        for ta_name, cn_name in _PATTERNS_TA.items():
-            matches = []
+        for sym, grp in grouped:
+            if len(grp) < 10:
+                continue
+            ohlcv = grp.set_index("trade_date")
+            try:
+                # cdl_pattern 一次计算所有指定形态，返回 DataFrame
+                res = ta.cdl_pattern(
+                    ohlcv["open"], ohlcv["high"],
+                    ohlcv["low"], ohlcv["close"], name=names_list)
+            except Exception:
+                continue
+            if res is None or res.empty:
+                continue
 
-            for sym, grp in grouped:
-                if len(grp) < 10:
+            for col in res.columns:
+                # 列名形如 CDL_DOJI_10_0.1 / CDL_3WHITESOLDIERS_10_0.1
+                if not str(col).startswith("CDL_"):
                     continue
-                ohlcv = grp.set_index("trade_date")[
-                    ["open", "high", "low", "close", "volume"]]
-
+                ta_name = "CDL" + str(col).split("_")[1]
+                cn_name = _PATTERNS_TA.get(ta_name)
+                if cn_name is None:
+                    continue
+                series = res[col].dropna()
+                nz = series[series != 0]
+                if nz.empty:
+                    continue
+                last_date = nz.index[-1]
+                last_val = int(nz.iloc[-1])
                 try:
-                    pattern_fn = getattr(ta, ta_name, None)
-                    if pattern_fn is None:
-                        continue
-                    result = pattern_fn(
-                        ohlcv["open"], ohlcv["high"],
-                        ohlcv["low"], ohlcv["close"])
-                    if result is None or result.sum() == 0:
-                        continue
-
-                    # 取最后一个非零信号
-                    last_signals = result[result != 0]
-                    if last_signals.empty:
-                        continue
-
-                    last_date = last_signals.index[-1]
-                    last_val = last_signals.iloc[-1]
-                    last_close = ohlcv.loc[last_date, "close"]
-
-                    matches.append({
-                        "symbol": sym,
-                        "date": str(last_date.date()),
-                        "close": round(float(last_close), 2),
-                        "signal": int(last_val),
-                    })
+                    last_close = float(ohlcv.loc[last_date, "close"])
                 except Exception:
                     continue
+                row = {
+                    "symbol": sym,
+                    "date": str(pd.Timestamp(last_date).date()),
+                    "close": round(last_close, 2),
+                    "signal": last_val,
+                }
+                results.setdefault(cn_name, []).append(row)
 
-            if matches:
-                results[cn_name] = pd.DataFrame(matches)
-
-        return results
+        return {cn: pd.DataFrame(rows) for cn, rows in results.items() if rows}
     finally:
         try: conn.close()
         except Exception: pass
