@@ -51,8 +51,16 @@ def _data_status() -> None:
     st.sidebar.caption("引擎: backtrader")
 
 
+def _record_recent(code: str) -> None:
+    """把最近看过的股票写入 session_state.recent（去重，最多 8 只）。"""
+    st.session_state.setdefault("recent", [])
+    lst = [c for c in st.session_state.recent if c != code]
+    lst.insert(0, code)
+    st.session_state.recent = lst[:8]
+
+
 def render_global_controls(hot_stocks: dict) -> None:
-    """全局控制区：工作模式 + 全局搜索 + 快捷选股 + 数据状态。"""
+    """全局控制区：工作模式 + 全局搜索 + 快捷选股 + 最近访问 + 数据状态。"""
     st.sidebar.title("📈 WinnerK股票查询系统")
 
     # ── 工作模式 ──
@@ -64,13 +72,22 @@ def render_global_controls(hot_stocks: dict) -> None:
         index=mode_idx, key="work_mode_radio")
     st.session_state.work_mode = "回测" if "回测" in label else "市场分析"
 
-    # ── 全局搜索（代码/名称，复用 _resolve_code 逻辑见 app.py 侧边栏） ──
+    # ── 全局搜索（代码/名称，模糊匹配） ──
     st.sidebar.subheader("🔎 全局搜索")
-    symbol = st.sidebar.text_input(
-        "股票代码/名称", value=st.session_state.get("symbol", "600036"),
-        key="global_symbol_show", help="6位代码或股票名称")
-    if symbol:
-        st.session_state["symbol"] = symbol.strip()
+    kw = st.sidebar.text_input(
+        "股票代码/名称", value="", key="global_search_kw",
+        placeholder="如 600519 / 贵州茅台", label_visibility="collapsed")
+    if kw:
+        from data.database import search_stocks
+        hits = search_stocks(kw, limit=6)
+        for h in hits:
+            if st.sidebar.button(f"{h['name']} {h['code']}",
+                                 key=f"gs_{h['code']}", width='stretch'):
+                st.session_state["symbol"] = h["code"]
+                _record_recent(h["code"])
+                st.rerun()
+        if not hits:
+            st.sidebar.caption("未匹配到股票")
 
     # ── 快捷选股 ──
     st.sidebar.subheader("⭐ 快捷选股")
@@ -79,6 +96,25 @@ def render_global_controls(hot_stocks: dict) -> None:
         with cols[i]:
             if st.button(name, key=f"hot_{code}", width='stretch'):
                 st.session_state["symbol"] = code
+                _record_recent(code)
+
+    # ── 最近访问 ──
+    recent = st.session_state.get("recent", [])
+    recent = [c for c in recent if not c.startswith("hot")][:8]
+    if recent:
+        name_map = {}
+        try:
+            from data.database import get_stock_name_map
+            name_map = get_stock_name_map()
+        except Exception:
+            pass
+        st.sidebar.subheader("🕘 最近访问")
+        rcols = st.sidebar.columns(len(recent))
+        for i, c in enumerate(recent):
+            lbl = name_map.get(c, c)
+            with rcols[i]:
+                if st.button(lbl, key=f"recent_{c}", width='stretch'):
+                    st.session_state["symbol"] = c
 
     st.sidebar.markdown("---")
     _data_status()

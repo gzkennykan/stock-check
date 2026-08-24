@@ -17,6 +17,9 @@ st.set_page_config(page_title="WinnerK股票查询系统", page_icon="📈", lay
 from ui.theme import apply_global_css
 apply_global_css()
 
+from ui.components import render_onboarding
+render_onboarding()
+
 
 def _is_lock_error(msg: str) -> bool:
     """判断是否为 DuckDB 文件锁被占用的瞬时错误（常因后台定时任务/另一个实例同步中）。"""
@@ -187,7 +190,7 @@ PAGES = {
         st.Page(render_tab4, title="资金排名", icon="💰", url_path="market-rank"),
         st.Page(render_lhb, title="龙虎榜", icon="🐉", url_path="lhb"),
         st.Page(render_wl, title="自选股", icon="⭐", url_path="watchlist"),
-        st.Page(render_tab11, title="市场全景", icon="🏭", url_path="industry"),
+        st.Page(render_tab11, title="行业资金轮动", icon="🏭", url_path="industry"),
         st.Page(render_tab9, title="北向&融资", icon="🌏", url_path="northbound"),
         st.Page(render_tab10, title="财务分析", icon="📊", url_path="fundamental"),
         st.Page(render_ai, title="AI智能分析", icon="🤖", url_path="ai"),
@@ -200,8 +203,8 @@ PAGES = {
         st.Page(render_tab8, title="组合回测", icon="🧺", url_path="portfolio"),
         st.Page(render_ml, title="ML因子研究", icon="🧠", url_path="ml"),
         st.Page(render_sv, title="信号验证", icon="📡", url_path="signal-validation"),
-        st.Page(render_stpl, title="策略模板", icon="🧩", url_path="strategy-templates"),
-        st.Page(render_tab13, title="高级分析", icon="🔬", url_path="advanced"),
+        st.Page(render_stpl, title="策略模板 · 信号验证", icon="🧩", url_path="strategy-templates"),
+        st.Page(render_tab13, title="量化工具箱", icon="🔬", url_path="advanced"),
     ],
     "🗄️ 数据": [
         st.Page(render_tab12, title="数据中心", icon="🗄️", url_path="database"),

@@ -847,8 +847,9 @@ def _render_stock_diagnosis():
 
     col_a, col_b = st.columns([2, 3])
     with col_a:
-        code = st.text_input("股票代码", value="600585", key="diag_code",
-                             placeholder="如 600585", max_chars=6).strip()
+        code = st.text_input("股票代码",
+                             value=st.session_state.get("symbol", "600585"),
+                             key="diag_code", placeholder="如 600585", max_chars=6).strip()
     with col_b:
         st.write("")
         st.write("")
@@ -1214,11 +1215,12 @@ def _render_stock_diagnosis():
 # ══════════════════════════════════════════════════
 
 def render():
-    st.title("📊 高级分析")
+    st.title("🔬 量化工具箱")
     st.caption("DuckDB 驱动 — 综合诊断 · 多因子 · 形态 · 异动 · 行业轮动 · 蜡烛 · 相关性 · 批量回测 · 量化信号 · 资金流向")
+    st.caption("💡 侧边栏「全局搜索 / 快捷选股 / 最近访问」选中的股票会作为个股诊断的默认标的")
 
-    # ── 大盘择时 ──
-    with st.expander("🌡️ 大盘择时（牛熊仓位参考）", expanded=True):
+    # ── 大盘择时（slim 横幅，默认折叠） ──
+    with st.expander("🌡️ 大盘择时（牛熊仓位参考）", expanded=False):
         from data.market_regime import detect_regime
         reg = detect_regime()
         if reg:

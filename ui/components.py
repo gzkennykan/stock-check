@@ -161,6 +161,24 @@ def error_retry(error, retry_cb, *, key: str = None) -> None:
     st.button("重试", key=key, on_click=retry_cb)
 
 
+# ─────────────────────────── 新手上路 ───────────────────────────
+
+def render_onboarding() -> None:
+    """首启引导：告诉用户三条最快上手路径，能看到结果后收起。"""
+    if st.session_state.get("onboarded"):
+        return
+    with st.expander("👋 快速上手（首启提示，可收起）", expanded=True):
+        st.markdown(
+            "**3 条最快上手路径**\n\n"
+            "1. **看某只票** → 侧边栏「全局搜索」输代码/名称（或点「⭐ 快捷选股」），切到 `量化工具箱 → 个股诊断` 看四维诊断。\n\n"
+            "2. **今天挑股** → `📋 选股工作流 → 🚀 一键自动选股`，顶部看 7 步闭环进度条 + 候选池。\n\n"
+            "3. **验证策略** → `🧪 单策略回测` 或 `策略模板 · 信号验证`，看命中率 / 超额。\n"
+        )
+        if st.button("✅ 我知道了", key="onboard_done"):
+            st.session_state.onboarded = True
+            st.rerun()
+
+
 # ─────────────────────────── 闭环进度条（stepper） ───────────────────────────
 
 def stepper(steps: list[dict]) -> None:

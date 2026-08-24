@@ -34,6 +34,7 @@ def _resolve_input(raw: str, name_map: dict) -> str | None:
 def render():
     st.title("🤖 AI 智能分析")
     st.caption("LLM 驱动的多维度股票分析 — 技术面 + 资金面 + 基本面 + AI 解读")
+    st.info("⚠️ 仅供研究参考，不构成投资建议；AI 解读可能与规则打分存在分歧，请多方综合判断")
 
     # ── API 配置（折叠） ──
     # 使用 st.session_state 持久化 API 配置，解决 password 字段不显示 value 的问题
@@ -56,7 +57,7 @@ def render():
             base_url=sc.get("base_url", ""),
         )
 
-    with st.expander("⚙️ LLM API 配置", expanded=not bool(st.session_state.llm_config.get("api_key"))):
+    with st.expander("⚙️ 数据引擎 & LLM 配置", expanded=False):
         # ── 当前配置状态 ──
         saved_key = st.session_state.llm_config.get("api_key", "")
         saved_provider = st.session_state.llm_config.get("provider", "deepseek")
@@ -399,12 +400,19 @@ def _render_batch_results(results: list):
         },
     )
 
-    # 每只股票展开详情
+    # 每只股票单行结论（去重：不再嵌套完整 4-tab 分析，避免重复计算与占屏）
     for r in results:
         if r.get("error"):
             continue
-        with st.expander(f"{r.get('rating', '')} {r['symbol']} {r['name']} — {r.get('score', 0):.1f}分"):
-            _render_single_result(r)
+        score = r.get("score", 0) or 0
+        summary = r.get("summary", "") or ""
+        with st.expander(f"{r.get('rating', '')} {r['symbol']} {r['name']} — {score:.1f}分"):
+            st.markdown(f"> {summary if summary else '（无文字结论，见单股分析页）'}")
+            grade = ("bull" if "强烈关注" in r.get("rating", "")
+                     else "info" if "可关注" in r.get("rating", "")
+                     else "warn" if "观察" in r.get("rating", "")
+                     else "bear")
+            badge(grade, r.get("rating", ""))
 
 
 def _render_portfolio_result(result: dict):

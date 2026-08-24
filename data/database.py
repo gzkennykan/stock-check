@@ -1409,6 +1409,62 @@ def get_stock_name_map() -> dict[str, str]:
     return _cached("stock_name_map", _CACHE_TTL, _stock_name_map_db)
 
 
+def _name_index() -> dict[str, list[str]]:
+    """构建 名称→[代码] 索引（小写、去空格），用户全局搜索/代码解析。"""
+    name_map = get_stock_name_map()
+    idx: dict[str, list[str]] = {}
+    for code, name in name_map.items():
+        key = str(name).lower().replace(" ", "")
+        if not key:
+            continue
+        idx.setdefault(key, [])
+        if code not in idx[key]:
+            idx[key].append(code)
+    return idx
+
+
+def search_stocks(raw: str, limit: int = 20) -> list[dict]:
+    """按代码或名称模糊搜索，返回 [{code,name}, ...]（无 st 依赖，供侧边栏/全局搜索）。
+
+    规则：6 位纯数字 → 精确代码；其它 → 名称精确/子串/含字匹配。
+    """
+    raw = (raw or "").strip()
+    if not raw:
+        return []
+    name_map = get_stock_name_map()
+    idx = _name_index()
+
+    if raw.isdigit() and len(raw) == 6:
+        code = raw.zfill(6)
+        return [{"code": code, "name": name_map.get(code, "")}] if code in name_map else []
+
+    lowered = raw.lower().replace(" ", "")
+    seen, out = set(), []
+    for name_key, codes in sorted(idx.items(), key=lambda kv: (len(kv[0]), kv[0])):
+        if lowered in name_key:
+            for c in codes:
+                if c not in seen:
+                    seen.add(c)
+                    out.append({"code": c, "name": name_map.get(c, "")})
+    if out:
+        return out[:limit]
+
+    # 名称含任意输入字（反向部分匹配）
+    for name_key, codes in idx.items():
+        if any(ch in name_key for ch in lowered):
+            for c in codes:
+                if c not in seen:
+                    seen.add(c)
+                    out.append({"code": c, "name": name_map.get(c, "")})
+    return out[:limit]
+
+
+def resolve_code(raw: str) -> str | None:
+    """智能解析用户输入为单个 6 位代码（无 st 依赖）。6位数字→代码；否则名称模糊取第一个。"""
+    matches = search_stocks(raw, limit=10)
+    return matches[0]["code"] if matches else None
+
+
 def _stock_name_map_db() -> dict[str, str]:
     conn = get_connection(read_only=True)
     try:
