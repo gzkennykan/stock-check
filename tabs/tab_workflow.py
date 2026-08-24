@@ -264,6 +264,16 @@ _STEPS = [
 ]
 
 
+def _goto_diagnosis(code: str) -> None:
+    """单股跳转到量化工具箱·个股诊断并自动触发诊断。"""
+    st.session_state["symbol"] = code
+    st.session_state["run_diag"] = True
+    try:
+        st.switch_page("advanced")
+    except Exception:
+        st.rerun()
+
+
 def render():
     st.title("📋 选股工作流")
     st.caption("8 步闭环选股 — 涨停板 → 资金确认 → 异动 → K线形态 → 技术确认 → 多因子 → 行业 → 回测诊断")
@@ -1022,5 +1032,15 @@ def _run_deep_diagnostics(codes: list, name_map: dict, silent: bool = False):
                 if not items:
                     items = [("无特殊机构信号", "")]
                 diagnosis_section("机构行为", "🏛️", r["insti_score"], 12, items)
+
+            act1, act2 = st.columns(2)
+            with act1:
+                if st.button("🔬 个股诊断细看", key=f"wf_goto_{code}", width='stretch'):
+                    _goto_diagnosis(code)
+            with act2:
+                if st.button("⭐ 加自选", key=f"wf_watch_{code}", width='stretch'):
+                    from data.database import add_to_watchlist
+                    ok = add_to_watchlist(code, name)
+                    st.toast(f"✅ {name or code} 已加入自选" if ok else "⚠️ 加入自选失败")
 
     st.success(f"✅ 深度诊断完成！共分析 {len(results)} 只候选股")
