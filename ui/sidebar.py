@@ -59,10 +59,25 @@ def _record_recent(code: str) -> None:
     st.session_state.recent = lst[:8]
 
 
+def render_title() -> None:
+    """程序名标题，置于侧边栏导航之上。"""
+    st.sidebar.title("📈 WinnerK股票查询系统")
+    st.sidebar.markdown("---")
+
+
+def render_page_nav(pages: dict) -> None:
+    """自定义分组的侧边栏导航（配合 st.navigation(position='hidden')）。
+
+    pages: 与 st.navigation 相同的 {分组: [st.Page, ...]} 结构。
+    """
+    for group, page_list in pages.items():
+        st.sidebar.markdown(f"**{group}**")
+        for page in page_list:
+            st.sidebar.page_link(page, use_container_width=True)
+
+
 def render_global_controls(hot_stocks: dict) -> None:
     """全局控制区：工作模式 + 全局搜索 + 快捷选股 + 最近访问 + 数据状态。"""
-    st.sidebar.title("📈 WinnerK股票查询系统")
-
     # ── 工作模式 ──
     st.session_state.setdefault("work_mode", "回测")
     st.session_state.setdefault("symbol", "600036")

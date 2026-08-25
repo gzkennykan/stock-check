@@ -17,6 +17,9 @@ st.set_page_config(page_title="WinnerK股票查询系统", page_icon="📈", lay
 from ui.theme import apply_global_css
 apply_global_css()
 
+from ui.components import render_onboarding
+render_onboarding()
+
 
 def _is_lock_error(msg: str) -> bool:
     """判断是否为 DuckDB 文件锁被占用的瞬时错误（常因后台定时任务/另一个实例同步中）。"""
@@ -212,16 +215,23 @@ PAGES = {
     ],
 }
 
-pg = st.navigation(PAGES, position="sidebar")
+# 用自定义侧边栏导航：把程序名放在导航之上（Streamlit 自动导航会钉在侧边栏顶部，
+# 无法把标题放到它上面，故用 position="hidden" + st.sidebar.page_link 手排）。
+pg = st.navigation(PAGES, position="hidden")
 
-# =========================== 侧边栏（三区分流） ===========================
-# ① 导航区 由 st.navigation 自带；
-# ② 全局控制区（工作模式/搜索/快捷选股/数据状态）→ ui.sidebar.render_global_controls
-# ③ 页内上下文 → 回测参数折叠以保留共享状态；自动日报/推送折叠。
+# =========================== 侧边栏（四区：标题 → 导航 → 全局控制 → 页内上下文） ===========================
+# ① 标题区（程序名，置于导航之上）
+# ② 导航区（分组 + 各页面链接，手排）
+# ③ 全局控制区（工作模式/搜索/快捷选股/数据状态）→ ui.sidebar.render_global_controls
+# ④ 页内上下文 → 回测参数折叠以保留共享状态；自动日报/推送折叠。
 from ui.sidebar import (
-    render_global_controls, render_backtest_params, render_settings,
+    render_title, render_page_nav, render_global_controls,
+    render_backtest_params, render_settings,
 )
 
+render_title()
+render_page_nav(PAGES)
+st.sidebar.divider()
 render_global_controls(HOT_STOCKS)
 st.sidebar.divider()
 render_backtest_params(STRATEGY_MAP)
