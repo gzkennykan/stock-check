@@ -17,9 +17,6 @@ st.set_page_config(page_title="WinnerK股票查询系统", page_icon="📈", lay
 from ui.theme import apply_global_css
 apply_global_css()
 
-from ui.components import render_onboarding
-render_onboarding()
-
 
 def _is_lock_error(msg: str) -> bool:
     """判断是否为 DuckDB 文件锁被占用的瞬时错误（常因后台定时任务/另一个实例同步中）。"""
