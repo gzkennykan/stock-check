@@ -126,9 +126,13 @@ def _startup_fund_flow_sync():
         from data.fund_flow import sync_fund_flow_snapshot
         try:
             result = sync_fund_flow_snapshot()
-            st.session_state._ff_startup_result = result
         except Exception as e:
-            st.session_state._ff_startup_result = {"status": "error", "message": str(e)}
+            result = {"status": "error", "message": str(e)}
+        try:
+            st.session_state._ff_startup_result = result
+        except Exception:
+            # 后台线程可能无会话上下文或线程不安全，吞掉避免打印未捕获 traceback
+            pass
 
     t = threading.Thread(target=_do_sync, daemon=True)
     t.start()
