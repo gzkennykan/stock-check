@@ -86,8 +86,7 @@ def _render_factor_ranking():
 
     if st.button("🔍 运行多因子排名", type="primary", width='stretch',
                  key="run_factors"):
-        st.cache_data.clear()
-        with st.spinner("正在计算全市场因子得分（约 10 秒）..."):
+        with st.spinner("正在计算全市场因子得分..."):
             weights = {"momentum": w_mom, "volatility": w_vol, "volume": w_vol_raw,
                        "trend": w_trend, "drawdown": w_dd}
             df = _load_factors(latest_date, weights)

@@ -4,7 +4,15 @@
 """
 import numpy as np
 import pandas as pd
-from .database import get_connection, _table_exists
+from .database import get_connection, _table_exists, _cached
+
+# 因子结果缓存 TTL（秒）：各因子只依赖 end_date，结果按日缓存避免每次交互全表重扫。
+_FACTOR_TTL = 1800
+
+
+def _cached_factor(name: str, end_date: str, fn):
+    """按日期缓存单个因子结果（5 个因子只依赖 end_date，权重影响的是下游线性合并）。"""
+    return _cached(f"factor_{name}_{end_date}", _FACTOR_TTL, fn)
 
 
 def compute_momentum(end_date: str) -> pd.DataFrame:
@@ -268,12 +276,12 @@ def compute_composite_ranking(
             "drawdown": 0.15,
         }
 
-    # 并行计算各因子
-    mom = compute_momentum(end_date)
-    vol = compute_volatility(end_date)
-    vol_s = compute_volume_score(end_date)
-    trend = compute_trend_score(end_date)
-    dd = compute_drawdown_score(end_date)
+    # 各因子只依赖 end_date，按日缓存（改权重不会触发重扫，只做 ~5200 行加权合并）
+    mom = _cached_factor("momentum", end_date, lambda: compute_momentum(end_date))
+    vol = _cached_factor("volatility", end_date, lambda: compute_volatility(end_date))
+    vol_s = _cached_factor("volume", end_date, lambda: compute_volume_score(end_date))
+    trend = _cached_factor("trend", end_date, lambda: compute_trend_score(end_date))
+    dd = _cached_factor("drawdown", end_date, lambda: compute_drawdown_score(end_date))
 
     # 合并
     merged = mom[["symbol", "mom_5d", "mom_10d", "mom_20d", "mom_60d"]].copy()

@@ -286,7 +286,7 @@ def _render_factor_mode():
 
     topn = st.selectbox("显示数量", [30, 50, 100, 200], index=1, key="fm_topn")
 
-    with st.spinner("计算全市场多因子排名（约几秒）..."):
+    with st.spinner("计算全市场多因子排名（首次约10秒，其后秒级）..."):
         ranking = compute_composite_ranking()
 
     if ranking.empty:
