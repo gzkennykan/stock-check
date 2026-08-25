@@ -695,22 +695,23 @@ def backfill_qfq(symbols: list[str] | None = None, resume: bool = True,
 # ════════════════ 选股信号记录（后验证闭环） ════════════════
 
 def insert_signal_records(records: list[dict]) -> int:
-    """批量插入信号记录。records 每项含 signal_date/symbol/name/source/signal_price/score。"""
+    """批量插入信号记录。records 每项含 signal_date/symbol/name/source/signal_price/score。
+
+    用 DataFrame 批量 `INSERT OR REPLACE ... BY NAME`（配合 DuckDB 自动注册），
+    替代逐条 execute，写路径性能更好。created_at 走列默认值。
+    """
     if not records:
+        return 0
+    write_df = pd.DataFrame(records).reindex(
+        columns=["signal_date", "symbol", "name", "source", "signal_price", "score"])
+    if write_df.empty:
         return 0
     conn = get_connection()
     try:
         _ensure_tables(conn)
-        n = 0
-        for r in records:
-            conn.execute("""
-                INSERT OR REPLACE INTO signal_records
-                    (signal_date, symbol, name, source, signal_price, score)
-                VALUES (?, ?, ?, ?, ?, ?)
-            """, [r.get("signal_date"), r.get("symbol"), r.get("name"),
-                  r.get("source"), r.get("signal_price"), r.get("score")])
-            n += 1
-        return n
+        conn.execute(
+            "INSERT OR REPLACE INTO signal_records BY NAME SELECT * FROM write_df")
+        return len(write_df)
     finally:
         conn.close()
 
@@ -1410,7 +1411,11 @@ def get_stock_name_map() -> dict[str, str]:
 
 
 def _name_index() -> dict[str, list[str]]:
-    """构建 名称→[代码] 索引（小写、去空格），用户全局搜索/代码解析。"""
+    """构建 名称→[代码] 索引（小写、去空格），带 TTL 缓存避免每次击键全量重建。"""
+    return _cached("name_index", _CACHE_TTL, _build_name_index)
+
+
+def _build_name_index() -> dict[str, list[str]]:
     name_map = get_stock_name_map()
     idx: dict[str, list[str]] = {}
     for code, name in name_map.items():
