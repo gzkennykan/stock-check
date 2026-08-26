@@ -96,6 +96,17 @@ def get_connection(read_only: bool = False):
     return _DB_CONN
 
 
+def _fetch_df(conn, query: str, params=()):
+    """conn.execute(query).df() 的安全封装：共享连接可能出现瞬态的
+    'No open result set'（后台线程/上次结果未清），重试一次通常可恢复。"""
+    try:
+        return conn.execute(query, params).df()
+    except Exception as e:
+        if "No open result set" in str(e):
+            return conn.execute(query, params).df()
+        raise
+
+
 def _ensure_tables(conn) -> None:
     """确保核心表存在，首次调用时自动建表"""
     conn.execute("""
@@ -738,7 +749,7 @@ def get_signal_records(source: str = None, start: str = None, end: str = None) -
         if where:
             q += " WHERE " + " AND ".join(where)
         q += " ORDER BY signal_date DESC, symbol"
-        df = conn.execute(q, params).df()
+        df = _fetch_df(conn, q, params)
         if df is None or df.empty:
             return pd.DataFrame()
         df["signal_date"] = pd.to_datetime(df["signal_date"])
@@ -1051,7 +1062,7 @@ def get_kline(symbol: str, start: str = None, end: str = None,
             WHERE {' AND '.join(where)}
             ORDER BY trade_date
         """
-        df = conn.execute(query, params).df()
+        df = _fetch_df(conn, query, params)
         if df.empty:
             return pd.DataFrame()
         df["trade_date"] = pd.to_datetime(df["trade_date"])
@@ -1141,7 +1152,7 @@ def search_kline(symbols: list[str], start: str, end: str,
               AND trade_date <= ?
             ORDER BY symbol, trade_date
         """
-        df = conn.execute(query, list(symbols) + [start, end]).df()
+        df = _fetch_df(conn, query, list(symbols) + [start, end])
         if not df.empty and "trade_date" in df.columns:
             df["trade_date"] = pd.to_datetime(df["trade_date"])
         return df
@@ -1214,7 +1225,7 @@ def get_stocks_in_db() -> pd.DataFrame:
             GROUP BY k.symbol, s.name, s.market
             ORDER BY k.symbol
         """
-        df = conn.execute(query).df()
+        df = _fetch_df(conn, query)
         if not df.empty:
             for col in ["data_start", "data_end"]:
                 df[col] = pd.to_datetime(df[col])
