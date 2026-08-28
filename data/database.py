@@ -97,14 +97,15 @@ def get_connection(read_only: bool = False):
 
 
 def _fetch_df(conn, query: str, params=()):
-    """conn.execute(query).df() 的安全封装：共享连接可能出现瞬态的
-    'No open result set'（后台线程/上次结果未清），重试一次通常可恢复。"""
-    try:
-        return conn.execute(query, params).df()
-    except Exception as e:
-        if "No open result set" in str(e):
-            return conn.execute(query, params).df()
-        raise
+    """并发安全的 df 读取：改用 conn.sql(query).df()。
+
+    conn.execute(...).df() 取的是共享连接上一次执行的"结果集"，后台线程/上次结果
+    未清时会偶发 'No open result set' 或读到错误列（如 KeyError: 'data_start'）。
+    conn.sql(...) 每次返回独立 relation（自带结果集），不受共享连接结果状态影响。
+    """
+    if params:
+        return conn.sql(query, params=params).df()
+    return conn.sql(query).df()
 
 
 def _ensure_tables(conn) -> None:
