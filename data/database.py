@@ -25,8 +25,14 @@ duckdb.DuckDBPyRelation.df = _safe_df
 
 import atexit
 import sys as _sys
+import threading as _threading
 
-_DB_CONN = None
+# DuckDB 连接非线程安全：主线程(Streamlit 页面)与后台线程(资金流/调度)若共用一条
+# 连接会并发争抢结果集，导致 'No open result set'/'KeyError'/'closed pending query result'
+# 等随机错误。改为「每线程一条连接」(threading.local)，互不干扰。
+_DB_CONNS: list = []
+_DB_CONNS_LOCK = _threading.Lock()
+_thread_conn = _threading.local()
 
 
 class _SharedConnection:
@@ -67,33 +73,35 @@ class _SharedConnection:
 
 
 def _cleanup_connection():
-    """atexit 回调：正常关闭 DuckDB 连接，释放文件锁"""
-    global _DB_CONN
-    if _DB_CONN is not None:
-        _DB_CONN._do_close()
-        _DB_CONN = None
+    """atexit 回调：正常关闭所有线程的 DuckDB 连接，释放文件锁"""
+    global _DB_CONNS
+    with _DB_CONNS_LOCK:
+        for c in list(_DB_CONNS):
+            c._do_close()
+        _DB_CONNS.clear()
 
 
 atexit.register(_cleanup_connection)
 
 
 def get_connection(read_only: bool = False):
-    """获取 DuckDB 单例连接（同一进程内共享，避免多 Tab 锁冲突）。
+    """获取 DuckDB 连接（每线程一条，隔离并发）。
 
+    主线程/后台线程各自持有独立连接，避免共享一条连接时并发 execute/df 抢结果集。
     始终以读写模式打开，避免 DuckDB 检测到同一文件不同配置而报错。
-    进程退出时通过 atexit 自动 checkpoint + 关闭，确保下次启动不受锁文件影响。
+    进程退出时 atexit 统一 checkpoint + 关闭，释放文件锁。
     """
-    global _DB_CONN
     import duckdb
 
-    if _DB_CONN is not None:
-        return _DB_CONN
-
-    raw = duckdb.connect(str(DB_PATH), read_only=False)
-    raw.execute("PRAGMA threads=2")
-
-    _DB_CONN = _SharedConnection(raw)
-    return _DB_CONN
+    c = getattr(_thread_conn, "_conn", None)
+    if c is None:
+        raw = duckdb.connect(str(DB_PATH), read_only=False)
+        raw.execute("PRAGMA threads=2")
+        c = _SharedConnection(raw)
+        _thread_conn._conn = c
+        with _DB_CONNS_LOCK:
+            _DB_CONNS.append(c)
+    return c
 
 
 def _fetch_df(conn, query: str, params=()):
